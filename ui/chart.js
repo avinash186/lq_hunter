@@ -154,6 +154,7 @@
     chart.timeScale().subscribeVisibleLogicalRangeChange(function (r) {
       if (r && !loading && hasMore && r.from < 12) loadOlder();
       redrawLevels();
+      tickCountdown();
       scheduleLvFetch();
       scheduleRangeSave();
     });
@@ -191,6 +192,7 @@
         syncControls();
         load();
         connectLive();
+        setInterval(tickCountdown, 1000);               // bar countdown
         setInterval(saveServer, 60000);                 // autosave every minute
         window.addEventListener('beforeunload', function () {
           try {
@@ -309,6 +311,33 @@
   }
   function priceToY(p) { return candle.priceToCoordinate(p); }
 
+  // ── bar countdown: seconds to next candle, pinned at the live price (right) ──
+  var TFSEC = { '1m': 60, '2m': 120, '3m': 180, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400, '1w': 604800 };
+  function etNaiveSeconds() {            // current ET wall-clock as epoch secs (matches bar times)
+    var ps = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      .formatToParts(new Date());
+    var o = {}; ps.forEach(function (x) { o[x.type] = x.value; });
+    return Date.UTC(+o.year, +o.month - 1, +o.day, o.hour === '24' ? 0 : +o.hour, +o.minute, +o.second) / 1000;
+  }
+  function fmtDur(s) {
+    s = Math.max(0, Math.floor(s));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), c = s % 60;
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return h > 0 ? h + ':' + p(m) + ':' + p(c) : p(m) + ':' + p(c);
+  }
+  function tickCountdown() {
+    var el = $('cx-countdown'); if (!el) return;
+    if (!bars.length || !candle) { el.style.display = 'none'; return; }
+    var last = bars[bars.length - 1];
+    var secs = TFSEC[S.tf] || 60;
+    var y = priceToY(last.close);
+    if (y == null) { el.style.display = 'none'; return; }
+    el.textContent = fmtDur((last.time + secs) - etNaiveSeconds());
+    el.style.display = '';
+    el.style.top = Math.round(y + 17) + 'px';      // just below the live-price tag
+  }
+
   // ─────────────────────── controls ───────────────────────
   function setActive(sel, attr, val) {
     document.querySelectorAll(sel).forEach(function (b) { b.classList.toggle('active', b.getAttribute(attr) === val); });
@@ -407,6 +436,7 @@
       else if (!bars.length || b.time > bars[bars.length - 1].time) bars.push(b);
       renderLegend(b);
       redrawLevels();
+      tickCountdown();
     } else if (ev.e === 'bar_close') {
       reloadSoon();                              // fold the closed 1m into the higher tf
     } else if (bars.length) {                    // higher-tf tick: nudge the forming bar
