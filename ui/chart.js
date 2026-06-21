@@ -334,6 +334,7 @@
     var y = priceToY(last.close);
     if (y == null) { el.style.display = 'none'; return; }
     el.textContent = fmtDur((last.time + secs) - etNaiveSeconds());
+    el.style.background = last.close >= last.open ? S.up : S.down;  // match price tag (bar color)
     el.style.display = 'block';                     // explicit (CSS default is none)
     el.style.top = Math.round(y + 17) + 'px';      // just below the live-price tag
   }

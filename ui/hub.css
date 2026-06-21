@@ -432,7 +432,7 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 .cx-legend .cx-leg-sym{font-weight:800;color:var(--t1);font-size:13px}
 .cx-legend .cx-leg-tf{color:var(--t3)}
 .cx-legend b{font-weight:700}
-.cx-countdown{position:absolute;right:2px;z-index:6;display:none;padding:1px 5px;border-radius:4px;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;background:var(--accent);pointer-events:none;transform:translateY(-50%);box-shadow:0 1px 4px rgba(0,0,0,.35);white-space:nowrap}
+.cx-countdown{position:absolute;right:6px;z-index:6;display:none;padding:1px 8px 1px 4px;border-radius:2px;font-size:11px;font-weight:400;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-variant-numeric:tabular-nums;color:#fff;pointer-events:none;transform:translateY(-50%);text-align:left;white-space:nowrap}
 .cx-label-legend{position:absolute;left:8px;bottom:30px;z-index:6;background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:7px 10px;font-size:10.5px;line-height:1.6;color:var(--t2);box-shadow:0 4px 16px rgba(0,0,0,.25);max-width:210px;display:none}
 .cx-label-legend.on{display:block}
 .cx-ll-row{display:flex;align-items:center;gap:6px;white-space:nowrap}
