@@ -15,6 +15,7 @@ data/bars/*.parquet
 data/bars/*.parquet.bak
 data/bars/*.parquet.tmp
 data/bars/*.parquet.corrupt*
+data/bars/*.parquet.backadj
 
 # Misc
 *.log
