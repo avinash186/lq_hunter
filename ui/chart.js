@@ -423,27 +423,50 @@
     LVDEF.forEach(function (t) { if (LV.types[t.key].on) kinds[t.kind] = 1; });
     return Object.keys(kinds);
   }
-  function fetchLevels() {
-    if (!$('cx-overlay')) return;
-    if (!bars.length) { levelData = { levels: [], zones: [] }; redrawLevels(); return; }
-    var vr = chart.timeScale().getVisibleRange();
-    if (!vr) return;
-    var from = Math.floor(vr.from), to = Math.ceil(vr.to);
+  // Levels are fetched for a window wider than the screen; panning/zooming
+  // within that buffer (and the same symbol/types/caps) just redraws — no call.
+  var lvCache = { key: null, from: 0, to: 0 };
+  function lvKey(kinds) {
+    return [S.sym, LV.unsweptOnly ? 'u' : 'a', LV.mode, LV.closestN,
+            kinds.slice().sort().join(','), lvCaps()].join('|');
+  }
+  function maybeFetchLevels() {
+    if (!$('cx-overlay') || !bars.length) {
+      levelData = { levels: [], zones: [] }; lvCache = { key: null, from: 0, to: 0 };
+      redrawLevels(); return;
+    }
+    var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
+    var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
     var closest = LV.unsweptOnly && LV.mode === 'closest';
-    var kinds = closest ? lvEnabledKinds() : lvKindsForSpan((to - from) / 86400);
-    if (!kinds.length) { levelData = { levels: [], zones: [] }; redrawLevels(); return; }
+    var kinds = closest ? lvEnabledKinds() : lvKindsForSpan((vto - vfrom) / 86400);
+    if (!kinds.length) {
+      levelData = { levels: [], zones: [] }; lvCache = { key: null, from: 0, to: 0 };
+      redrawLevels(); return;
+    }
+    var key = lvKey(kinds);
+    if (closest) {                          // nearest set is range-independent
+      if (key !== lvCache.key) doFetchLevels(kinds, key, vfrom, vto, true);
+      return;
+    }
+    if (key === lvCache.key && vfrom >= lvCache.from && vto <= lvCache.to) return;  // in buffer
+    var pad = Math.max(vto - vfrom, 7200);  // fetch ±one screen-width (min 2h)
+    doFetchLevels(kinds, key, vfrom - pad, vto + pad, false);
+  }
+  function doFetchLevels(kinds, key, from, to, closest) {
     var my = ++lvReq;
     var u = new URL('/api/levels/' + S.sym, location.origin);
-    u.searchParams.set('from', from); u.searchParams.set('to', to);
+    u.searchParams.set('from', Math.floor(from)); u.searchParams.set('to', Math.ceil(to));
     u.searchParams.set('types', kinds.join(',')); u.searchParams.set('caps', lvCaps());
     if (closest) u.searchParams.set('closest', Math.max(1, LV.closestN | 0));
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       if (my !== lvReq) return;
       levelData = { levels: d.levels || [], zones: d.zones || [] };
+      lvCache = closest ? { key: key, from: -Infinity, to: Infinity }
+                        : { key: key, from: Math.floor(from), to: Math.ceil(to) };
       redrawLevels();
     }).catch(function () {});
   }
-  function scheduleLvFetch() { clearTimeout(lvFetchT); lvFetchT = setTimeout(fetchLevels, 300); }
+  function scheduleLvFetch() { clearTimeout(lvFetchT); lvFetchT = setTimeout(maybeFetchLevels, 300); }
 
   function labelText(lv) { return lv.tags.map(function (t) { return ABBR[t] || t; }).join('·'); }
   function drawLabels(ctx, labels) {
@@ -591,14 +614,14 @@
       LV.unsweptOnly = val; saveLV();
       var mr = $('cx-mode-row'); if (mr) mr.style.display = val ? '' : 'none';
       var cr0 = $('cx-closest-row'); if (cr0) cr0.style.display = (val && LV.mode === 'closest') ? '' : 'none';
-      buildLabelLegend(); fetchLevels(); return;
+      buildLabelLegend(); scheduleLvFetch(); return;
     }
     if (key === '__mode') {
       LV.mode = el.value; saveLV();
       var cr = $('cx-closest-row'); if (cr) cr.style.display = (LV.unsweptOnly && LV.mode === 'closest') ? '' : 'none';
-      buildLabelLegend(); fetchLevels(); return;
+      buildLabelLegend(); scheduleLvFetch(); return;
     }
-    if (key === '__closestN') { LV.closestN = Math.max(1, Math.min(50, +el.value || 1)); saveLV(); fetchLevels(); return; }
+    if (key === '__closestN') { LV.closestN = Math.max(1, Math.min(50, +el.value || 1)); saveLV(); scheduleLvFetch(); return; }
     if (key === '__legend') { LV.legend = val; saveLV(); buildLabelLegend(); return; }
     LV.types[key][prop] = val; saveLV();
     if (prop === 'on' || prop === 'ext') { redrawLevels(); scheduleLvFetch(); }
