@@ -12,9 +12,43 @@ NQ spans ~2012 -> 2026 (~4.8M rows); ES is similar.
 """
 from __future__ import annotations
 
+import logging
+import os
+import time
+
 import pandas as pd
 
 import config
+
+log = logging.getLogger(__name__)
+
+
+def _read_or_quarantine(path, **kwargs):
+    """Read a parquet; if it's corrupt/truncated, rename it aside and return
+    None (so callers treat it as 'no data' and the fetcher reseeds) instead of
+    crashing the whole engine."""
+    if not path.exists():
+        return None
+    try:
+        return pd.read_parquet(path, **kwargs)
+    except Exception as exc:  # pyarrow.ArrowInvalid, OSError, …
+        dst = path.with_name(path.name + ".corrupt")
+        i = 1
+        while dst.exists():
+            dst = path.with_name(path.name + f".corrupt{i}")
+            i += 1
+        try:
+            os.replace(path, dst)
+            log.error("corrupt parquet %s (%s) — quarantined to %s", path, exc, dst.name)
+        except OSError:
+            log.error("corrupt parquet %s (%s) — could not quarantine", path, exc)
+        return None
+
+
+def _empty_frame() -> pd.DataFrame:
+    idx = pd.DatetimeIndex([], name="time")
+    return pd.DataFrame({c: pd.Series(dtype="float32")
+                         for c in ("open", "high", "low", "close", "volume")}, index=idx)
 
 _OHLC = {
     "open": "first",
@@ -36,10 +70,9 @@ def load_bars(symbol: str, *, as_datetime: bool = True) -> pd.DataFrame:
     with OHLCV columns, sorted ascending and de-duplicated on timestamp.
     """
     path = bars_path(symbol)
-    if not path.exists():
-        raise FileNotFoundError(f"No bar data for {symbol!r}: {path}")
-
-    df = pd.read_parquet(path)
+    df = _read_or_quarantine(path)
+    if df is None:
+        raise FileNotFoundError(f"No readable bar data for {symbol!r}: {path}")
     df = df.drop_duplicates("ts").sort_values("ts").reset_index(drop=True)
 
     if as_datetime:
@@ -67,20 +100,16 @@ _DTYPES = {"ts": "int64", "open": "float32", "high": "float32",
 
 def last_timestamp(symbol: str) -> int | None:
     """Newest stored bar time (unix seconds) for a symbol, or None if no data."""
-    path = bars_path(symbol)
-    if not path.exists():
+    df = _read_or_quarantine(bars_path(symbol), columns=["ts"])
+    if df is None or not len(df):
         return None
-    ts = pd.read_parquet(path, columns=["ts"])["ts"]
-    return int(ts.max()) if len(ts) else None
+    return int(df["ts"].max())
 
 
 def last_bar(symbol: str) -> tuple[int, float] | None:
     """(ts, close) of the newest stored bar — the anchor for back-adjustment."""
-    path = bars_path(symbol)
-    if not path.exists():
-        return None
-    df = pd.read_parquet(path, columns=["ts", "close"])
-    if not len(df):
+    df = _read_or_quarantine(bars_path(symbol), columns=["ts", "close"])
+    if df is None or not len(df):
         return None
     row = df.loc[df["ts"].idxmax()]
     return int(row["ts"]), float(row["close"])
@@ -118,8 +147,12 @@ def _store(symbol: str) -> dict:
     mtime = path.stat().st_mtime if path.exists() else 0.0
     s = _STORE.get(symbol)
     if s is None or s["mtime"] != mtime:
-        df = load_bars(symbol)
-        df.index = df.index.tz_convert(NY_TZ).tz_localize(None)
+        try:
+            df = load_bars(symbol)
+            df.index = df.index.tz_convert(NY_TZ).tz_localize(None)
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            log.warning("no readable bars for %s (%s) — using empty frame", symbol, exc)
+            df = _empty_frame()
         s = _STORE[symbol] = {"mtime": mtime, "official": df,
                               "live": (s["live"] if s else []), "frame": None}
         _rebuild_frame(symbol)
@@ -174,8 +207,8 @@ def append_bars(symbol: str, new_df: pd.DataFrame) -> int:
     Returns the number of rows added (net new timestamps).
     """
     path = bars_path(symbol)
-    if path.exists():
-        existing = pd.read_parquet(path)
+    existing = _read_or_quarantine(path)
+    if existing is not None:
         before = len(existing)
         combined = pd.concat([existing, new_df], ignore_index=True)
     else:
@@ -184,7 +217,18 @@ def append_bars(symbol: str, new_df: pd.DataFrame) -> int:
     combined = (combined.drop_duplicates("ts", keep="last")
                         .sort_values("ts").reset_index(drop=True))
     path.parent.mkdir(parents=True, exist_ok=True)
-    combined.to_parquet(path, index=False)
+    # Atomic write: build a temp file then replace, so a kill/crash mid-write can
+    # never leave a truncated parquet (the cause of the ES corruption).
+    tmp = path.with_name(path.name + ".tmp")
+    combined.to_parquet(tmp, index=False)
+    for attempt in range(5):                 # Windows: retry transient file locks
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2)
     return len(combined) - before
 
 

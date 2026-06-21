@@ -96,12 +96,15 @@ def status():
         p = data_loader.bars_path(sym)
         info = {"symbol": sym, "exists": p.exists()}
         if p.exists():
-            # Cheap metadata read — only the ts column, not the full file.
-            ts = pd.read_parquet(p, columns=["ts"])["ts"]
-            info["rows"] = int(len(ts))
-            info["start"] = str(pd.to_datetime(ts.iloc[0], unit="s", utc=True))
-            info["end"] = str(pd.to_datetime(ts.iloc[-1], unit="s", utc=True))
-            info["mb"] = round(p.stat().st_size / 1e6, 1)
+            try:
+                # Cheap metadata read — only the ts column, not the full file.
+                ts = pd.read_parquet(p, columns=["ts"])["ts"]
+                info["rows"] = int(len(ts))
+                info["start"] = str(pd.to_datetime(ts.iloc[0], unit="s", utc=True))
+                info["end"] = str(pd.to_datetime(ts.iloc[-1], unit="s", utc=True))
+                info["mb"] = round(p.stat().st_size / 1e6, 1)
+            except Exception as exc:           # corrupt/unreadable parquet
+                info["error"] = f"unreadable: {exc}"
         datasets.append(info)
 
     return JSONResponse({

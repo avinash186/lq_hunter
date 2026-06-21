@@ -139,7 +139,10 @@ class LiveEngine:
         except Exception:
             log.exception("live: startup fetch failed (continuing)")
         for s in self.symbols:
-            self._rebuild_active(s)
+            try:
+                self._rebuild_active(s)
+            except Exception:
+                log.exception("live: active-level build failed for %s (continuing)", s)
             try:
                 self.states[s].contract = topstep.front_contract(s)
             except Exception:
@@ -238,16 +241,19 @@ class LiveEngine:
         self._disconnected.set()
 
     def _on_trade_msg(self, args):
-        # args = [contractId, payload]; payload per GatewayTrade
+        # args = [contractId, payload]; payload is a LIST of GatewayTrade dicts
+        # (the feed batches trades), but tolerate a single dict too.
         self._last_msg = time.time()
         try:
-            cid, p = args[0], args[1]
+            cid, payload = args[0], args[1]
             sym = next((s for s in self.symbols if self.states[s].contract == cid), None)
             if not sym:
                 return
-            price = float(p["price"]); vol = float(p.get("volume", 0) or 0)
-            ts = pd.Timestamp(p["timestamp"]).tz_convert(NY).tz_localize(None)
-            self.on_trade(sym, price, vol, _epoch(ts))
+            trades = payload if isinstance(payload, list) else [payload]
+            for p in trades:
+                price = float(p["price"]); vol = float(p.get("volume", 0) or 0)
+                ts = pd.Timestamp(p["timestamp"]).tz_convert(NY).tz_localize(None)
+                self.on_trade(sym, price, vol, _epoch(ts))
         except Exception:
             log.exception("live: bad trade msg")
 
