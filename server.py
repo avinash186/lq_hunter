@@ -57,7 +57,8 @@ def _nearest_cached(symbol: str, n: int, tset, tick: float) -> dict:
     last = int(df.index[-1].value) if len(df) else 0
     key = (symbol, last, n, tuple(sorted(tset)) if tset else "all")
     if key not in _NEAREST:
-        _NEAREST.clear()
+        if len(_NEAREST) > 8:                 # bounded cache (avoid thrash across n/types)
+            _NEAREST.clear()
         _NEAREST[key] = liquidity.nearest(df, n, tset, tick)
     return _NEAREST[key]
 
@@ -160,6 +161,27 @@ def levels(symbol: str,
                 capd[k] = int(v)
     out = liquidity.compute(data_loader.live_frame(symbol), int(frm), int(to), tset, tick, capd)
     return JSONResponse({"symbol": symbol, **out})
+
+
+@app.get("/api/midpoint/{symbol}")
+def midpoint(symbol: str, types: str | None = None):
+    """Current immediate-bracket midpoint (IBM): the mid between the nearest
+    unswept level above and the nearest unswept level below the latest price.
+    ``types`` optional CSV restricts the level universe (same kinds as /levels)."""
+    symbol = symbol.upper()
+    if symbol not in config.SYMBOLS:
+        return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
+    tset = set(types.split(",")) if types else None
+    tick = config.TICK_SIZE.get(symbol, 0.25)
+    out = _nearest_cached(symbol, 1, tset, tick)
+    levels = out.get("levels", [])
+    highs = [l["price"] for l in levels if l["side"] == "high"]
+    lows = [l["price"] for l in levels if l["side"] == "low"]
+    if highs and lows:
+        above, below = min(highs), max(lows)
+        return JSONResponse({"symbol": symbol, "mid": round((above + below) / 2, 4),
+                             "above": above, "below": below})
+    return JSONResponse({"symbol": symbol, "mid": None})
 
 
 @app.get("/api/bars/{symbol}")

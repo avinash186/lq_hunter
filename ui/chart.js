@@ -34,6 +34,7 @@
       if (c.mode) LV.mode = c.mode;
       if (typeof c.closestN === 'number') LV.closestN = c.closestN;
       if (typeof c.legend === 'boolean') LV.legend = c.legend;
+      if (typeof c.midOn === 'boolean') LV.midOn = c.midOn;
       if (typeof c._v === 'number') LV._v = c._v;
       if (c.types) LVDEF.forEach(function (t) { if (c.types[t.key]) LV.types[t.key] = Object.assign(LV.types[t.key], c.types[t.key]); });
     }
@@ -64,7 +65,7 @@
     var saved = JSON.parse(localStorage.getItem('cxlevels') || 'null') || {};
     var s = { unsweptOnly: saved.unsweptOnly !== false, mode: saved.mode || 'all',
               closestN: saved.closestN || 3, legend: saved.legend !== false,
-              _v: saved._v || 0, types: {} };
+              midOn: !!saved.midOn, _v: saved._v || 0, types: {} };
     LVDEF.forEach(function (t) { s.types[t.key] = Object.assign({}, t.def, (saved.types || {})[t.key] || {}); });
     return s;
   })();
@@ -115,6 +116,7 @@
         timeScale: { borderColor: light ? '#dde3ec' : '#252840' },
       });
       redrawLevels();
+      if (midLine) midLine.applyOptions({ color: midColor() });
     }
   }
 
@@ -234,6 +236,7 @@
       else chart.timeScale().scrollToRealTime();
       if (bars.length) renderLegend(bars[bars.length - 1]);
       scheduleLvFetch();
+      updateMidpoint();
       setLoading(false);
     }).catch(function () { if (my === reqId) setLoading(false); });
   }
@@ -388,11 +391,12 @@
     var ev; try { ev = JSON.parse(m.data); } catch (e) { return; }
     if (ev.sym && ev.sym !== S.sym) return;
     if (ev.e === 'tick' || ev.e === 'bar_close') applyLiveBar(ev);
-    else if (ev.e === 'level_new') { if (ev.level) { levelData.levels.push(ev.level); redrawLevels(); } }
+    else if (ev.e === 'level_new') { if (ev.level) { levelData.levels.push(ev.level); redrawLevels(); } scheduleMid(); }
     else if (ev.e === 'level_swept') {
       var lv = levelData.levels.find(function (l) { return l.id === ev.id; });
       if (lv) { lv.swept = true; if (ev.at) lv.end = ev.at; redrawLevels(); }
-    } else if (ev.e === 'reconciled') { scheduleLvFetch(); }
+      scheduleMid();
+    } else if (ev.e === 'reconciled') { scheduleLvFetch(); scheduleMid(); }
   }
   function applyLiveBar(ev) {
     var b = ev.bar;
@@ -478,6 +482,28 @@
     }).catch(function () {});
   }
   function scheduleLvFetch() { clearTimeout(lvFetchT); lvFetchT = setTimeout(maybeFetchLevels, 300); }
+
+  // ── current midpoint (IBM): dotted line midway between the nearest unswept
+  //    level above and the nearest unswept level below the latest price ──
+  var midLine = null, midReq = 0, midT = 0;
+  function midColor() { return S.theme === 'light' ? '#5b6b85' : '#c8cee0'; }
+  function clearMid() { if (midLine && candle) { try { candle.removePriceLine(midLine); } catch (e) {} } midLine = null; }
+  function updateMidpoint() {
+    if (!LV.midOn || !candle) { clearMid(); return; }
+    var my = ++midReq;
+    var u = new URL('/api/midpoint/' + S.sym, location.origin);
+    var kinds = lvEnabledKinds(); if (kinds.length) u.searchParams.set('types', kinds.join(','));
+    fetch(u).then(function (r) { return r.json(); }).then(function (d) {
+      if (my !== midReq || !LV.midOn) return;
+      if (d && d.mid != null) {
+        var dotted = (window.LightweightCharts && LightweightCharts.LineStyle) ? LightweightCharts.LineStyle.Dotted : 1;
+        var opts = { price: d.mid, color: midColor(), lineWidth: 1, lineStyle: dotted,
+                     axisLabelVisible: true, title: 'mid' };
+        if (midLine) midLine.applyOptions(opts); else midLine = candle.createPriceLine(opts);
+      } else clearMid();
+    }).catch(function () {});
+  }
+  function scheduleMid() { clearTimeout(midT); midT = setTimeout(updateMidpoint, 250); }
 
   function labelText(lv) { return lv.tags.map(function (t) { return ABBR[t] || t; }).join('·'); }
   function drawLabels(ctx, labels) {
@@ -585,7 +611,9 @@
       '<span class="cx-lp-mode-label">N per side</span>' +
       '<input type="number" min="1" max="50" data-key="__closestN" data-prop="closestN" value="' + LV.closestN + '"></div>' +
       '<div class="cx-lt" style="background:none;border:none;padding:0;margin:2px 0 6px"><div class="cx-lt-head">' +
-      lvSw('__legend', 'legend', LV.legend) + '<span class="cx-lt-name">Show label legend</span></div></div>';
+      lvSw('__legend', 'legend', LV.legend) + '<span class="cx-lt-name">Show label legend</span></div></div>' +
+      '<div class="cx-lt" style="background:none;border:none;padding:0;margin:2px 0 6px"><div class="cx-lt-head">' +
+      lvSw('__mid', 'mid', LV.midOn) + '<span class="cx-lt-name">Current midpoint</span></div></div>';
     var last = '';
     LVDEF.forEach(function (t) {
       if (t.group !== last) { html += '<div class="cx-lg-title">' + t.group + '</div>'; last = t.group; }
@@ -634,6 +662,7 @@
     }
     if (key === '__closestN') { LV.closestN = Math.max(1, Math.min(50, +el.value || 1)); saveLV(); scheduleLvFetch(); return; }
     if (key === '__legend') { LV.legend = val; saveLV(); buildLabelLegend(); return; }
+    if (key === '__mid') { LV.midOn = val; saveLV(); updateMidpoint(); return; }
     LV.types[key][prop] = val; saveLV();
     if (prop === 'on' || prop === 'ext') { redrawLevels(); scheduleLvFetch(); }
     else redrawLevels();
