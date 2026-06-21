@@ -38,6 +38,23 @@ def _epoch(ts) -> int:
     return int((ts - _EPOCH) // pd.Timedelta(seconds=1))
 
 
+def _market_open(now=None) -> bool:
+    """Rough CME equity-futures session check (ET): Sun 18:00 → Fri 17:00, with
+    the daily 17:00–18:00 maintenance break. Used only to gate the no-data
+    watchdog so we don't churn reconnects when the market is legitimately quiet."""
+    import datetime
+    import zoneinfo
+    now = now or datetime.datetime.now(zoneinfo.ZoneInfo(NY))
+    wd, t = now.weekday(), now.hour * 60 + now.minute
+    if wd == 5:                       # Saturday
+        return False
+    if wd == 6:                       # Sunday: opens 18:00
+        return t >= 18 * 60
+    if wd == 4 and t >= 17 * 60:      # Friday: closes 17:00
+        return False
+    return not (17 * 60 <= t < 18 * 60)   # daily maintenance break
+
+
 def _et(sec: int) -> pd.Timestamp:
     return pd.Timestamp(int(sec), unit="s")          # naive ET wall-clock
 
@@ -106,6 +123,9 @@ class LiveEngine:
         self.hub = None
         self._stop = False
         self._opened = False
+        self._disconnected = threading.Event()
+        self._backoff = 5
+        self._last_msg = 0.0
         self._lock = threading.RLock()
 
     # ───────────────────────── lifecycle ─────────────────────────
@@ -124,12 +144,13 @@ class LiveEngine:
                 self.states[s].contract = topstep.front_contract(s)
             except Exception:
                 log.exception("live: contract lookup failed for %s", s)
-        self._connect()
+        threading.Thread(target=self._connect_loop, name="live-feed", daemon=True).start()
         threading.Thread(target=self._minute_loop, name="live-minute", daemon=True).start()
         threading.Thread(target=self._flush_loop, name="live-flush", daemon=True).start()
 
     def stop(self):
         self._stop = True
+        self._disconnected.set()
         try:
             if self.hub:
                 self.hub.stop()
@@ -143,24 +164,60 @@ class LiveEngine:
         self.states[symbol].reset_active(levels)
         log.info("live: %s active levels = %d", symbol, len(self.states[symbol].active))
 
-    # ───────────────────────── feed ─────────────────────────
-    def _connect(self):
+    # ───────────────────────── feed (self-healing) ─────────────────────────
+    def _connect_loop(self):
+        """Keep a live market-hub connection up forever: (re)connect with
+        exponential backoff, re-subscribe + gap-fill on every open, and force a
+        reconnect if the stream goes silent during market hours."""
         from signalrcore.hub_connection_builder import HubConnectionBuilder
-        token = topstep._login()
-        url = config.TOPSTEP_RTC_URL.rstrip("/") + "/hubs/market"
-        hub = (HubConnectionBuilder()
-               .with_url(url, options={"access_token_factory": (lambda: token), "verify_ssl": True})
-               .with_automatic_reconnect({"type": "raw", "keep_alive_interval": 10, "reconnect_interval": 5})
-               .build())
-        hub.on("GatewayTrade", self._on_trade_msg)
-        hub.on_open(self._subscribe)
-        hub.on_error(lambda e: log.warning("live hub error: %s", e))
-        self.hub = hub
-        hub.start()
+        while not self._stop:
+            self._disconnected.clear()
+            try:
+                token = topstep._login()
+                url = config.TOPSTEP_RTC_URL.rstrip("/") + "/hubs/market"
+                hub = (HubConnectionBuilder()
+                       .with_url(url, options={"access_token_factory": (lambda t=token: t),
+                                               "verify_ssl": True})
+                       .build())
+                hub.on("GatewayTrade", self._on_trade_msg)
+                hub.on_open(self._on_open)
+                hub.on_close(self._on_close)
+                hub.on_error(lambda e: log.warning("live: hub error: %s", e))
+                self.hub = hub
+                self._last_msg = time.time()
+                log.info("live: connecting to market hub …")
+                hub.start()
+            except Exception as e:
+                log.warning("live: connect failed (%s) — retry in %ds", e, self._backoff)
+                self._sleep_backoff()
+                continue
 
-    def _subscribe(self):
-        # Fires on initial connect and on every auto-reconnect. On reconnect we
-        # gap-fill from official data before re-subscribing.
+            while not self._stop:                        # monitor this connection
+                if self._disconnected.wait(timeout=5):
+                    log.info("live: market hub closed")
+                    break
+                if _market_open() and time.time() - self._last_msg > 90:
+                    log.warning("live: no data for 90s during market hours — reconnecting")
+                    break
+            if self._stop:
+                break
+            try:
+                self.hub.stop()
+            except Exception:
+                pass
+            log.info("live: reconnecting in %ds …", self._backoff)
+            self._sleep_backoff()
+
+    def _sleep_backoff(self):
+        for _ in range(int(self._backoff)):
+            if self._stop:
+                return
+            time.sleep(1)
+        self._backoff = min(self._backoff * 2, 60)       # 5s → 60s cap
+
+    def _on_open(self):
+        self._backoff = 5                                # reset on success
+        self._last_msg = time.time()
         if self._opened:
             log.info("live: reconnected — gap-filling")
             try:
@@ -177,8 +234,12 @@ class LiveEngine:
             if c:
                 self.hub.send("SubscribeContractTrades", [c])
 
+    def _on_close(self):
+        self._disconnected.set()
+
     def _on_trade_msg(self, args):
         # args = [contractId, payload]; payload per GatewayTrade
+        self._last_msg = time.time()
         try:
             cid, p = args[0], args[1]
             sym = next((s for s in self.symbols if self.states[s].contract == cid), None)

@@ -365,10 +365,21 @@
 
   function connectLive() {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var delay = 2000, everOpen = false;
     function open() {
       var ws = new WebSocket(proto + '//' + location.host + '/ws');
+      ws.onopen = function () {
+        console.log('[live] WebSocket connected');
+        delay = 2000;                          // reset backoff
+        if (everOpen) load();                  // resync after a drop (catch missed bars/levels)
+        everOpen = true;
+      };
       ws.onmessage = onLiveMsg;
-      ws.onclose = function () { setTimeout(open, 3000); };   // auto-reconnect
+      ws.onclose = function () {
+        console.warn('[live] WebSocket closed — reconnecting in ' + Math.round(delay / 1000) + 's');
+        setTimeout(open, delay);
+        delay = Math.min(delay * 1.8, 30000);  // exponential backoff, cap 30s
+      };
       ws.onerror = function () { try { ws.close(); } catch (e) {} };
     }
     open();
