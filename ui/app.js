@@ -21,6 +21,42 @@ setInterval(clock, 1000); clock();
 
 function fmt(n) { return n == null ? '—' : Number(n).toLocaleString(); }
 
+function toast(msg, kind) {
+  const wrap = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast' + (kind ? ' ' + kind : '');
+  el.textContent = msg;
+  wrap.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 4500);
+}
+
+// Pull the latest bars from TopStep (both datasets), then refresh the view.
+async function fetchLatest() {
+  const btn = document.getElementById('btn-fetch');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Fetching…';
+  try {
+    const res = await (await fetch('/api/fetch', { method: 'POST' })).json();
+    if (res.ok) {
+      const added = (res.results || []).reduce((a, r) => a + (r.added || 0), 0);
+      const parts = (res.results || []).map(r => `${r.symbol} +${fmt(r.added)}`);
+      toast(added ? `Added ${fmt(added)} bars (${parts.join(', ')})` : 'Already up to date',
+            'success');
+    } else {
+      const err = (res.results || []).find(r => r.error);
+      toast('Fetch failed: ' + (err ? err.error : 'unknown error'), 'error');
+    }
+  } catch (e) {
+    toast('Fetch failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+    load();
+  }
+}
+
 async function load() {
   let s;
   try {

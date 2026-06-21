@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LGBM Trader</title>
+<title>LQ Hunter</title>
 <link rel="stylesheet" href="/ui/hub.css">
 </head>
 <body>
@@ -11,12 +11,16 @@
 <!-- ═══════════ SIDEBAR ═══════════ -->
 <nav id="sidebar">
   <div class="sb-logo">
-    <div class="sb-wordmark">LGBM<span>Trader</span></div>
+    <div class="sb-wordmark">LQ<span>Hunter</span></div>
     <div class="sb-tagline">Data Workspace</div>
   </div>
   <div class="sb-nav">
     <div class="nav-group-label">Workspace</div>
-    <div class="nav-item active" data-page="dashboard" onclick="nav(this)">
+    <div class="nav-item active" data-page="chart" onclick="nav(this)">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="6" y="10" width="3" height="7"/><rect x="13" y="6" width="3" height="11"/><path d="M7.5 10V7.5M7.5 17v2M14.5 6V4M14.5 17v2"/></svg>
+      Chart
+    </div>
+    <div class="nav-item" data-page="dashboard" onclick="nav(this)">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
       Dashboard
     </div>
@@ -36,18 +40,67 @@
 <div id="main">
   <div id="topbar">
     <button id="tb-menu" onclick="sbToggle()" aria-label="Menu" title="Menu"><span></span><span></span><span></span></button>
-    <div class="tb-title" id="tb-title">Dashboard</div>
+    <div class="tb-title" id="tb-title">Chart</div>
     <div class="tb-pills">
       <div class="pill"><div class="dot" id="ts-dot"></div>Topstep</div>
       <div class="pill"><div class="dot" id="tg-dot"></div>Telegram</div>
     </div>
+    <button class="tb-theme" id="theme-toggle" title="Toggle light / dark">&#9789;</button>
     <div class="tb-clock" id="clock"></div>
   </div>
 
   <div id="content">
 
+    <!-- ── CHART (home) ── -->
+    <div class="page active" id="page-chart">
+      <div class="cx-toolbar">
+        <div class="cx-syms">
+          <button class="cx-sym active" data-sym="NQ">NQ</button>
+          <button class="cx-sym" data-sym="ES">ES</button>
+        </div>
+        <div class="cx-sep"></div>
+        <div class="cx-tfs">
+          <button class="cx-tf active" data-tf="1m">1m</button>
+          <button class="cx-tf" data-tf="2m">2m</button>
+          <button class="cx-tf" data-tf="3m">3m</button>
+          <button class="cx-tf" data-tf="5m">5m</button>
+          <button class="cx-tf" data-tf="15m">15m</button>
+          <button class="cx-tf" data-tf="1h">1h</button>
+          <button class="cx-tf" data-tf="1d">1d</button>
+          <button class="cx-tf" data-tf="1w">1w</button>
+        </div>
+        <div class="cx-tools">
+          <button class="cx-tool active" id="cx-levels-btn" title="Liquidity levels">Liq</button>
+          <button class="cx-tool active" id="cx-vol-toggle" title="Toggle volume">Vol</button>
+          <button class="cx-tool" id="cx-fullscreen" title="Fullscreen">&#9974;</button>
+          <button class="cx-tool" id="cx-settings-btn" title="Chart settings">&#9881;</button>
+        </div>
+      </div>
+      <div class="cx-host" id="cx-host">
+        <div id="cx-chart"></div>
+        <canvas id="cx-overlay"></canvas>
+        <div class="cx-legend" id="cx-legend"></div>
+        <div class="cx-label-legend" id="cx-label-legend"></div>
+        <div class="cx-loading" id="cx-loading">Loading…</div>
+        <button class="cx-latest" id="cx-latest" title="Go to latest bar">L</button>
+        <button class="cx-fit" id="cx-fit" title="Fit data to screen">A</button>
+        <div class="cx-settings" id="cx-settings">
+          <div class="cx-set-title">Chart Settings</div>
+          <div class="cx-set-row"><label>Up color</label><input type="color" id="cx-up" value="#26a69a"></div>
+          <div class="cx-set-row"><label>Down color</label><input type="color" id="cx-down" value="#ef5350"></div>
+          <div class="cx-set-row"><label>Gridlines</label><input type="checkbox" id="cx-grid" checked></div>
+          <div class="cx-set-row"><label>Show volume</label><input type="checkbox" id="cx-vol-check" checked></div>
+          <div class="cx-set-row"><label>Vol opacity</label><input type="range" id="cx-vol-op" min="0" max="100" value="55"><span class="cx-set-op-val" id="cx-vol-op-val">55%</span></div>
+        </div>
+        <div class="cx-levels-panel" id="cx-levels-panel">
+          <div class="cx-lp-head"><span class="cx-set-title">Liquidity Levels</span><button class="cx-lp-x" id="cx-lp-x">&times;</button></div>
+          <div class="cx-lp-body" id="cx-lp-body"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── DASHBOARD ── -->
-    <div class="page active" id="page-dashboard">
+    <div class="page" id="page-dashboard">
       <div class="ph"><div class="ph-left">
         <div class="ph-title">Dashboard</div>
         <div class="ph-sub">Accumulated NQ & ES market data</div>
@@ -91,6 +144,10 @@
       <div class="ph"><div class="ph-left">
         <div class="ph-title">Datasets</div>
         <div class="ph-sub">NQ &amp; ES 1-minute bars (OHLCV)</div>
+      </div>
+      <div class="ph-right" style="display:flex;gap:10px;align-items:center">
+        <button class="btn btn-secondary btn-sm" onclick="load()">↻ Refresh</button>
+        <button class="btn btn-primary btn-sm" id="btn-fetch" onclick="fetchLatest()">⬇ Fetch latest</button>
       </div></div>
       <div class="card"><div class="tbl-wrap"><table class="dt">
         <thead><tr><th>Symbol</th><th>Bars</th><th>Start</th><th>End</th><th>Size</th></tr></thead>
@@ -102,6 +159,8 @@
 </div>
 
 <div id="toasts"></div>
+<script src="/ui/vendor/lightweight-charts.js"></script>
 <script src="/ui/app.js"></script>
+<script src="/ui/chart.js"></script>
 </body>
 </html>

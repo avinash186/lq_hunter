@@ -16,3 +16,8 @@ data/bars/*.parquet
 # Misc
 *.log
 .DS_Store
+
+# IDE / runtime state
+.idea/
+*.iml
+data/ui_settings.json

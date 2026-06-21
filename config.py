@@ -32,3 +32,6 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Symbols with accumulated 1-minute bar data in data/bars/.
 SYMBOLS = ["NQ", "ES"]
+
+# Minimum price increment per symbol — used to treat near-equal levels as one.
+TICK_SIZE = {"NQ": 0.25, "ES": 0.25}
