@@ -7,16 +7,10 @@ echo   LQ Hunter  -  Telegram bot + chart server
 echo ==============================================
 echo.
 
-rem --- refuse to start a second copy (port 8000 already in use) ---
-python -c "import socket,sys;s=socket.socket();s.settimeout(0.4);r=s.connect_ex(('127.0.0.1',8000));s.close();sys.exit(0 if r==0 else 1)"
-if not errorlevel 1 (
-  echo LQ Hunter is already running on http://127.0.0.1:8000
-  echo Opening it now. To restart, close the other LQ Hunter window first.
-  start "" http://127.0.0.1:8000
-  echo.
-  pause
-  exit /b
-)
+rem --- kill any previous LQ Hunter so we always start clean ---
+echo Stopping any existing LQ Hunter instance...
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'run\.py|server\.py|bot\.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
+timeout /t 2 >nul
 
 echo Checking dependencies (first run may take a minute)...
 python -m pip install -q -r requirements.txt
@@ -32,8 +26,7 @@ python run.py
 
 echo.
 echo ============================================================
-echo  LQ Hunter stopped. If this closed on its own, read the
-echo  error message ABOVE this line (ModuleNotFound = dependency,
-echo  bind/10048 = another copy is already running).
+echo  LQ Hunter stopped. Relaunch the shortcut anytime - it clears
+echo  any old instance first, so you never need to exit carefully.
 echo ============================================================
 pause
