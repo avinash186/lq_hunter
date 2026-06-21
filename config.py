@@ -12,7 +12,6 @@ load_dotenv(ROOT / ".env")
 # ── Paths ──
 DATA_DIR = ROOT / "data"
 BARS_DIR = DATA_DIR / "bars"
-MODELS_DIR = ROOT / "models"
 UI_DIR = ROOT / "ui"
 
 # ── Credentials (paste into .env) ──

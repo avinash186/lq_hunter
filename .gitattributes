@@ -1,7 +1,4 @@
-# LightGBM text models and data must never be line-ending-normalized.
-# autocrlf on Windows will silently corrupt them. Force binary.
-*.lgbm   binary
-*.txt    binary
+# Binary data must never be line-ending-normalized.
+# autocrlf on Windows will silently corrupt it. Force binary.
 *.parquet binary
 *.pkl    binary
-*.joblib binary

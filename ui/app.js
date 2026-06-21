@@ -15,8 +15,7 @@ function sbToggle(forceClose) {
 }
 
 function clock() {
-  const d = new Date();
-  document.getElementById('clock').textContent = d.toLocaleTimeString();
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
 }
 setInterval(clock, 1000); clock();
 
@@ -39,23 +38,24 @@ async function load() {
   const ds = (s.datasets || []).filter(d => d.exists);
   document.getElementById('stat-datasets').textContent = ds.length;
   document.getElementById('stat-bars').textContent = fmt(ds.reduce((a, d) => a + (d.rows || 0), 0));
-  document.getElementById('stat-models').textContent = (s.models || []).length;
-  const aucs = (s.models || []).map(m => m.holdout_auc).filter(x => x != null);
-  document.getElementById('stat-auc').textContent = aucs.length ? Math.max(...aucs).toFixed(3) : '—';
+  document.getElementById('stat-disk').textContent =
+    ds.length ? ds.reduce((a, d) => a + (d.mb || 0), 0).toFixed(0) + ' MB' : '—';
+
+  // Coverage = widest span across datasets, in years.
+  const starts = ds.map(d => d.start).filter(Boolean).sort();
+  const ends = ds.map(d => d.end).filter(Boolean).sort();
+  if (starts.length && ends.length) {
+    const yrs = (new Date(ends[ends.length - 1]) - new Date(starts[0])) / (365.25 * 864e5);
+    document.getElementById('stat-span').textContent = yrs.toFixed(1) + 'y';
+    document.getElementById('stat-span-sub').textContent =
+      starts[0].slice(0, 4) + ' → ' + ends[ends.length - 1].slice(0, 4);
+  }
 
   document.getElementById('datasets-body').innerHTML = ds.length ? ds.map(d => `
     <tr><td class="td-name">${d.symbol}</td><td>${fmt(d.rows)}</td>
     <td>${(d.start || '').slice(0, 10)}</td><td>${(d.end || '').slice(0, 10)}</td>
     <td>${d.mb} MB</td></tr>`).join('')
     : '<tr><td colspan="5" class="empty">No datasets found.</td></tr>';
-
-  const m = s.models || [];
-  document.getElementById('models-body').innerHTML = m.length ? m.map(x => `
-    <tr><td class="td-name">${x.symbol}_${x.timeframe}_${x.created_utc}</td>
-    <td><span class="tag tag-accent">${x.symbol}</span></td><td>${x.timeframe}</td>
-    <td>${fmt(x.rows)}</td><td class="${x.holdout_auc >= 0.5 ? 'td-pos' : 'td-neg'}">${x.holdout_auc}</td>
-    <td>${x.created_utc}</td></tr>`).join('')
-    : '<tr><td colspan="6" class="empty">No models yet — run the trainer.</td></tr>';
 }
 load();
 setInterval(load, 10000);
