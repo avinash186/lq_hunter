@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 
 import pandas as pd
 
@@ -121,10 +120,6 @@ class LiveEngine:
         self.broadcast = broadcast       # callable(dict) -> push event to clients
         self.tick = tick_size or {}
         self.states = {s: SymbolState(s) for s in self.symbols}
-        # Additive shift from the raw front-month feed scale to the stored
-        # back-adjusted (continuous) scale. Applied to every incoming tick so
-        # the forming bar + sweeps line up with history. 0 = no shift (safe).
-        self.offset = {s: 0.0 for s in self.symbols}
         self.hub = None
         self._stop = False
         self._opened = False
@@ -152,7 +147,6 @@ class LiveEngine:
                 self.states[s].contract = topstep.front_contract(s)
             except Exception:
                 log.exception("live: contract lookup failed for %s", s)
-            self._compute_offset(s)
         threading.Thread(target=self._connect_loop, name="live-feed", daemon=True).start()
         threading.Thread(target=self._minute_loop, name="live-minute", daemon=True).start()
         threading.Thread(target=self._flush_loop, name="live-flush", daemon=True).start()
@@ -256,10 +250,8 @@ class LiveEngine:
             if not sym:
                 return
             trades = payload if isinstance(payload, list) else [payload]
-            off = self.offset.get(sym, 0.0)
             for p in trades:
-                price = float(p["price"]) + off       # raw feed -> stored scale
-                vol = float(p.get("volume", 0) or 0)
+                price = float(p["price"]); vol = float(p.get("volume", 0) or 0)
                 ts = pd.Timestamp(p["timestamp"]).tz_convert(NY).tz_localize(None)
                 self.on_trade(sym, price, vol, _epoch(ts))
         except Exception:
@@ -338,34 +330,10 @@ class LiveEngine:
             except Exception:
                 log.exception("live: reconcile failed")
 
-    def _compute_offset(self, symbol):
-        """Measure the additive shift (raw front-month feed -> stored
-        back-adjusted scale) by comparing official adjusted bars to raw bars for
-        the same minutes. Roll-safe (recomputed each reconcile). On any failure
-        the offset is left unchanged, so behaviour degrades to 'no shift'."""
-        try:
-            cid = self.states[symbol].contract or topstep.front_contract(symbol)
-            now = _dt.now(_tz.utc)
-            raw = topstep.fetch_minute_bars(cid, now - _td(minutes=20), now)
-            if not raw:
-                return
-            rawmap = {_epoch(pd.Timestamp(b["t"]).tz_convert(NY).tz_localize(None)): b["c"]
-                      for b in raw}
-            adj = fetcher.fetch_recent(symbol, minutes=20)
-            diffs = sorted(a["close"] - rawmap[a["start"]] for a in adj if a["start"] in rawmap)
-            if diffs:
-                new = float(diffs[len(diffs) // 2])           # median
-                if new != self.offset.get(symbol):
-                    log.info("live: %s back-adjust offset = %.2f", symbol, new)
-                self.offset[symbol] = new
-        except Exception:
-            log.exception("live: offset compute failed for %s", symbol)
-
     def _reconcile(self):
         # Pull the last few official bars (no disk write); correct provisional
         # bars and catch any sweeps the tick feed missed. Cheap — no full rebuild.
         for s in self.symbols:
-            self._compute_offset(s)                  # keep the shift fresh (roll-safe)
             try:
                 bars = fetcher.fetch_recent(s, minutes=3)
             except Exception:
