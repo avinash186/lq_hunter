@@ -12,6 +12,9 @@ venv/
 # Big data — the parquet bars are large; track them with LFS or keep local only.
 # Comment the next two lines out if you want them in the repo.
 data/bars/*.parquet
+data/bars/*.parquet.bak
+data/bars/*.parquet.tmp
+data/bars/*.parquet.corrupt*
 
 # Misc
 *.log

@@ -265,6 +265,8 @@ async def ws_endpoint(ws: WebSocket):
 async def _on_startup():
     global _loop, _engine
     _loop = asyncio.get_running_loop()
+    for sym in config.SYMBOLS:                    # integrity guard + refresh backups
+        data_loader.ensure_healthy(sym)
     asyncio.create_task(_tick_flush())
     _engine = live.LiveEngine(config.SYMBOLS, broadcast=_broadcast, tick_size=config.TICK_SIZE)
     _engine.start()

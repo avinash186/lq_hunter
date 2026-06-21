@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import time
 
 import pandas as pd
@@ -49,6 +50,49 @@ def _empty_frame() -> pd.DataFrame:
     idx = pd.DatetimeIndex([], name="time")
     return pd.DataFrame({c: pd.Series(dtype="float32")
                          for c in ("open", "high", "low", "close", "volume")}, index=idx)
+
+
+def _valid_parquet(path) -> bool:
+    try:
+        import pyarrow.parquet as pq
+        pq.read_metadata(path)                 # footer-only check, fast
+        return True
+    except Exception:
+        return False
+
+
+def _atomic_copy(src, dst) -> None:
+    tmp = dst.with_name(dst.name + ".tmp")
+    shutil.copyfile(src, tmp)
+    os.replace(tmp, dst)
+
+
+def ensure_healthy(symbol: str) -> str:
+    """Startup integrity guard. Keeps a last-known-good ``.bak`` snapshot:
+    - main file valid  -> refresh the backup, return "ok".
+    - main missing/corrupt -> quarantine it and restore from the backup if the
+      backup is valid ("restored"), else "missing".
+    Combined with atomic writes, this means a future corruption auto-recovers on
+    the next launch instead of losing data."""
+    path = bars_path(symbol)
+    bak = path.with_name(path.name + ".bak")
+    if path.exists() and _valid_parquet(path):
+        try:
+            _atomic_copy(path, bak)
+        except OSError:
+            log.warning("could not refresh backup for %s", symbol)
+        return "ok"
+    if path.exists():                          # corrupt — rename aside
+        _read_or_quarantine(path)
+    if bak.exists() and _valid_parquet(bak):
+        try:
+            _atomic_copy(bak, path)
+            log.warning("restored %s from backup %s", symbol, bak.name)
+            return "restored"
+        except OSError:
+            log.error("backup restore failed for %s", symbol)
+    log.error("no healthy data or usable backup for %s", symbol)
+    return "missing"
 
 _OHLC = {
     "open": "first",
