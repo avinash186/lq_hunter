@@ -16,9 +16,11 @@ from __future__ import annotations
 import logging
 import re
 import socket
+import datetime as _datetime
 import subprocess
 import sys
 import time
+import zoneinfo as _zoneinfo
 from queue import Empty, Queue
 from threading import Thread
 
@@ -27,10 +29,35 @@ import requests
 import config
 from src import fetcher, notify
 
+# All log timestamps in Eastern time.
+_ET_TZ = _zoneinfo.ZoneInfo("America/New_York")
+logging.Formatter.converter = staticmethod(
+    lambda secs: _datetime.datetime.fromtimestamp(secs, _ET_TZ).timetuple())
+
 log = logging.getLogger("bot")
 
 TG = "https://api.telegram.org/bot{token}/{method}"
 TUNNEL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+# Commands shown in Telegram's "/" dropdown (registered via setMyCommands).
+BOT_COMMANDS = [
+    {"command": "hub", "description": "Launch the UI and get a public link"},
+    {"command": "fetch", "description": "Pull the latest NQ & ES bars from TopStep"},
+    {"command": "status", "description": "Is the hub up?"},
+    {"command": "stop", "description": "Tear the hub down"},
+    {"command": "help", "description": "List commands"},
+]
+
+
+def _register_commands():
+    """Tell Telegram our command list so typing '/' shows a menu that
+    narrows as you type (same mechanism BotFather uses)."""
+    try:
+        requests.post(TG.format(token=config.TELEGRAM_BOT_TOKEN, method="setMyCommands"),
+                      json={"commands": BOT_COMMANDS}, timeout=10)
+        log.info("registered %d bot commands", len(BOT_COMMANDS))
+    except requests.RequestException:
+        log.warning("could not register bot commands", exc_info=True)
 
 HELP = (
     "Commands:\n"
@@ -195,11 +222,12 @@ def _handle(cmd: str, hub: Hub) -> None:
 
 def main() -> None:
     logging.basicConfig(
-        level=config.LOG_LEVEL,
+        level=config.LOG_LEVEL, datefmt="%Y-%m-%d %H:%M:%S ET",
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if not notify.configured():
         raise SystemExit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env first.")
+    _register_commands()
 
     allowed = str(config.TELEGRAM_CHAT_ID)
     hub = Hub()

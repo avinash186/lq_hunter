@@ -7,12 +7,18 @@ Open http://127.0.0.1:8000/ (host/port configurable in .env).
 from __future__ import annotations
 
 import asyncio
+import datetime as _datetime
 import json
 import logging
+import zoneinfo as _zoneinfo
 
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO,
+# All log timestamps in Eastern time.
+_ET_TZ = _zoneinfo.ZoneInfo("America/New_York")
+logging.Formatter.converter = staticmethod(
+    lambda secs: _datetime.datetime.fromtimestamp(secs, _ET_TZ).timetuple())
+logging.basicConfig(level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S ET",
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 from fastapi import FastAPI, Query, WebSocket
 from fastapi.middleware.gzip import GZipMiddleware

@@ -10,12 +10,15 @@ its own active window, and the bundled parquet already holds the long history.
 from __future__ import annotations
 
 import logging
+import zoneinfo
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
 import config
 from src import data_loader, topstep
+
+_ET = zoneinfo.ZoneInfo("America/New_York")
 
 log = logging.getLogger(__name__)
 
@@ -46,8 +49,8 @@ def update_symbol(symbol: str) -> dict:
         "contracts": contracts,
         "fetched": int(len(bars)),
         "added": int(added),
-        "new_end": (datetime.fromtimestamp(new_last, tz=timezone.utc)
-                    .strftime("%Y-%m-%d %H:%M UTC") if new_last else None),
+        "new_end": (datetime.fromtimestamp(new_last, tz=timezone.utc).astimezone(_ET)
+                    .strftime("%Y-%m-%d %H:%M ET") if new_last else None),
     }
     log.info("update %s: +%d bars (fetched %d) -> %s",
              symbol, added, len(bars), result["new_end"])
