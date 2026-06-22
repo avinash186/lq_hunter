@@ -21,29 +21,40 @@ import pandas as pd
 
 import config
 
+try:
+    from pyarrow.lib import ArrowInvalid
+except Exception:  # pragma: no cover
+    ArrowInvalid = ValueError
+
 log = logging.getLogger(__name__)
 
 
 def _read_or_quarantine(path, **kwargs):
-    """Read a parquet; if it's corrupt/truncated, rename it aside and return
-    None (so callers treat it as 'no data' and the fetcher reseeds) instead of
-    crashing the whole engine."""
+    """Read a parquet. Quarantine ONLY on genuine corruption (ArrowInvalid) so
+    callers reseed; on transient OS errors (e.g. a Windows file lock while the
+    flush is writing) retry, then re-raise — never quarantine a file that is
+    merely busy. (A blanket ``except`` once nuked a good 5M-row archive.)"""
     if not path.exists():
         return None
-    try:
-        return pd.read_parquet(path, **kwargs)
-    except Exception as exc:  # pyarrow.ArrowInvalid, OSError, …
-        dst = path.with_name(path.name + ".corrupt")
-        i = 1
-        while dst.exists():
-            dst = path.with_name(path.name + f".corrupt{i}")
-            i += 1
+    for attempt in range(3):
         try:
-            os.replace(path, dst)
-            log.error("corrupt parquet %s (%s) — quarantined to %s", path, exc, dst.name)
-        except OSError:
-            log.error("corrupt parquet %s (%s) — could not quarantine", path, exc)
-        return None
+            return pd.read_parquet(path, **kwargs)
+        except ArrowInvalid as exc:               # truncated / not a parquet
+            dst = path.with_name(path.name + ".corrupt")
+            i = 1
+            while dst.exists():
+                dst = path.with_name(path.name + f".corrupt{i}"); i += 1
+            try:
+                os.replace(path, dst)
+                log.error("corrupt parquet %s (%s) — quarantined to %s", path, exc, dst.name)
+            except OSError:
+                log.error("corrupt parquet %s (%s) — could not quarantine", path, exc)
+            return None
+        except OSError as exc:                    # transient lock — retry, keep the file
+            if attempt == 2:
+                log.warning("read %s failed transiently (%s) — leaving file intact", path, exc)
+                raise
+            time.sleep(0.2)
 
 
 def _empty_frame() -> pd.DataFrame:

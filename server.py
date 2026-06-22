@@ -52,14 +52,14 @@ def _epoch_secs(ts) -> int:
 _NEAREST: dict[tuple, dict] = {}
 
 
-def _nearest_cached(symbol: str, n: int, tset, tick: float) -> dict:
+def _nearest_cached(symbol: str, n: int, tset, tick: float, confirm: int = 0) -> dict:
     df = data_loader.live_frame(symbol)
     last = int(df.index[-1].value) if len(df) else 0
-    key = (symbol, last, n, tuple(sorted(tset)) if tset else "all")
+    key = (symbol, last, n, tuple(sorted(tset)) if tset else "all", confirm)
     if key not in _NEAREST:
         if len(_NEAREST) > 8:                 # bounded cache (avoid thrash across n/types)
             _NEAREST.clear()
-        _NEAREST[key] = liquidity.nearest(df, n, tset, tick)
+        _NEAREST[key] = liquidity.nearest(df, n, tset, tick, confirm)
     return _NEAREST[key]
 
 
@@ -150,7 +150,7 @@ def levels(symbol: str,
     tset = set(types.split(",")) if types else None
     tick = config.TICK_SIZE.get(symbol, 0.25)
     if closest:
-        out = _nearest_cached(symbol, max(1, int(closest)), tset, tick)
+        out = _nearest_cached(symbol, max(1, int(closest)), tset, tick, liquidity.CONFIRM_SECONDS)
         return JSONResponse({"symbol": symbol, **out})
     capd = None
     if caps:
@@ -159,7 +159,8 @@ def levels(symbol: str,
             k, _, v = part.partition(":")
             if v.isdigit():
                 capd[k] = int(v)
-    out = liquidity.compute(data_loader.live_frame(symbol), int(frm), int(to), tset, tick, capd)
+    out = liquidity.compute(data_loader.live_frame(symbol), int(frm), int(to), tset, tick, capd,
+                            confirm=liquidity.CONFIRM_SECONDS)
     return JSONResponse({"symbol": symbol, **out})
 
 
@@ -173,7 +174,7 @@ def midpoint(symbol: str, types: str | None = None):
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
     tset = set(types.split(",")) if types else None
     tick = config.TICK_SIZE.get(symbol, 0.25)
-    out = _nearest_cached(symbol, 1, tset, tick)
+    out = _nearest_cached(symbol, 1, tset, tick, liquidity.MIDPOINT_CONFIRM_SECONDS)
     levels = out.get("levels", [])
     highs = [l["price"] for l in levels if l["side"] == "high"]
     lows = [l["price"] for l in levels if l["side"] == "low"]

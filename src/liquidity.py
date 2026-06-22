@@ -39,6 +39,12 @@ CAP_DAYS = {"week": None, "day": 14, "ib": 5, "killzone": 5, "macro": 5, "betwee
 
 IB = (9 * 60 + 30, 10 * 60 + 30)   # initial balance: NY 09:30–10:30
 
+# A level only "counts" once it has formed and survived this long *unswept*
+# (don't act on fresh extremes / lower-lows until they're confirmed). Measured
+# from window-end. A level taken out before this never appears.
+CONFIRM_SECONDS = 600              # 10 one-minute bars — general level creation
+MIDPOINT_CONFIRM_SECONDS = 900     # 15 min — stricter, for the current midpoint
+
 # Compute levels over a window extended this far left of the requested `from`,
 # so still-active older levels (esp. weekly) appear. Weekly is approximated to
 # this lookback; everything else is well within it.
@@ -47,7 +53,7 @@ BUFFER_DAYS = 200
 
 def compute(df: pd.DataFrame, frm: int, to: int, types: set[str] | None = None,
             tick: float = 0.25, caps: dict | None = None,
-            extend_full: bool = False) -> dict:
+            extend_full: bool = False, confirm: int = 0) -> dict:
     """Liquidity overlapping the unix-second window [frm, to] for a tz-aware
     (UTC) 1-minute OHLC frame ``df`` (DatetimeIndex).
 
@@ -119,6 +125,12 @@ def compute(df: pd.DataFrame, frm: int, to: int, types: set[str] | None = None,
         # ``anchor`` = the bar the line is drawn from (the extreme that made the
         # high/low); sweeps still start at window-end.
         end, swept = sweep(price, side, wend, cap_days[kind])
+        if confirm:
+            # Survived = time it stood unswept after forming. A level taken out
+            # within ``confirm`` of forming never counts.
+            survived = (end - wend) if swept else (int(tsi[-1]) - wend)
+            if survived < confirm:
+                return
         levels.append({
             "id": level_id(kind, side, wend, session),
             "kind": kind, "tier": TIER[kind], "side": side, "price": float(price),
@@ -266,7 +278,7 @@ def make_level(kind: str, side: str, price: float, anchor: int, window_start: in
             "provisional": bool(provisional), "tags": [tag]}
 
 
-def _scan_unswept(df: pd.DataFrame, types: set[str], tick: float) -> list[dict]:
+def _scan_unswept(df: pd.DataFrame, types: set[str], tick: float, confirm: int = 0) -> list[dict]:
     """All currently-unswept levels (end=None), via suffix max/min so "unswept"
     is O(1): a window high is unswept iff it is >= the max high of every later
     bar (right-to-left running max); likewise for lows. Macro/between are bounded
@@ -287,6 +299,7 @@ def _scan_unswept(df: pd.DataFrame, types: set[str], tick: float) -> list[dict]:
     base = pd.DataFrame({"h": highs, "l": lows, "ts": tsi, "pos": np.arange(nbar)})
     isocal = ny.isocalendar()
     recent = tsi[-1] - NEAREST_MACRO_DAYS * 86400
+    cutoff = int(tsi[-1]) - confirm     # only levels formed at/before this "count"
 
     out: list[dict] = []
 
@@ -302,6 +315,8 @@ def _scan_unswept(df: pd.DataFrame, types: set[str], tick: float) -> list[dict]:
         hts = base.loc[g["h"].idxmax().to_numpy(), "ts"].to_numpy()
         lts = base.loc[g["l"].idxmin().to_numpy(), "ts"].to_numpy()
         for i in range(len(gmax)):
+            if confirm and we[i] > cutoff:      # not yet confirmed (too fresh)
+                continue
             a = wepos[i] + 1
             if a >= nbar or gmax[i] >= smax[a]:
                 out.append(make_level(kind, "high", gmax[i], hts[i], ws[i], we[i], session))
@@ -333,15 +348,16 @@ def _scan_unswept(df: pd.DataFrame, types: set[str], tick: float) -> list[dict]:
 
 
 def nearest(df: pd.DataFrame, n: int, types: set[str] | None = None,
-            tick: float = 0.25) -> dict:
-    """The ``n`` nearest unswept levels above and below the latest price."""
-    merged = _scan_unswept(df, types or set(TIER), tick)
+            tick: float = 0.25, confirm: int = 0) -> dict:
+    """The ``n`` nearest unswept levels above and below the latest price.
+    ``confirm`` (secs) skips levels younger than that — see ``CONFIRM_SECONDS``."""
+    merged = _scan_unswept(df, types or set(TIER), tick, confirm)
     hi = sorted((l for l in merged if l["side"] == "high"), key=lambda l: l["price"])[:n]
     lo = sorted((l for l in merged if l["side"] == "low"), key=lambda l: -l["price"])[:n]
     return {"levels": hi + lo, "zones": []}
 
 
 def active_unswept(df: pd.DataFrame, types: set[str] | None = None,
-                   tick: float = 0.25) -> list[dict]:
+                   tick: float = 0.25, confirm: int = 0) -> list[dict]:
     """Every currently-unswept level — the live engine's initial active set."""
-    return _scan_unswept(df, types or set(TIER), tick)
+    return _scan_unswept(df, types or set(TIER), tick, confirm)

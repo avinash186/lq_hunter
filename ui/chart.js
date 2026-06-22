@@ -228,6 +228,7 @@
   function load() {                 // (re)load newest bars for current sym/tf
     var my = ++reqId;
     setLoading(true);
+    clearMid();                     // reset the frozen midpoint on symbol/tf change
     fetchBars().then(function (res) {
       if (my !== reqId) return;
       bars = res.bars || [];
@@ -421,7 +422,7 @@
     var ev; try { ev = JSON.parse(m.data); } catch (e) { return; }
     if (ev.sym && ev.sym !== S.sym) return;
     if (ev.e === 'tick' || ev.e === 'bar_close') applyLiveBar(ev);
-    else if (ev.e === 'level_new') { if (ev.level) { levelData.levels.push(ev.level); redrawLevels(); } scheduleMid(); }
+    else if (ev.e === 'level_new') { scheduleLvFetch(); scheduleMid(); }   // refetch (confirmed only)
     else if (ev.e === 'level_swept') {
       var lv = levelData.levels.find(function (l) { return l.id === ev.id; });
       if (lv) { lv.swept = true; if (ev.at) lv.end = ev.at; redrawLevels(); }
@@ -531,7 +532,8 @@
         var opts = { price: d.mid, color: midColor(), lineWidth: 1, lineStyle: dotted,
                      axisLabelVisible: true, title: 'mid' };
         if (midLine) midLine.applyOptions(opts); else midLine = candle.createPriceLine(opts);
-      } else clearMid();
+      }
+      // null mid (no confirmed bracket, e.g. fast trend) -> keep the last line (freeze)
     }).catch(function () {});
   }
   function scheduleMid() { clearTimeout(midT); midT = setTimeout(updateMidpoint, 250); }
