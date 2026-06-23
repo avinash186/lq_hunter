@@ -22,8 +22,12 @@ _COLS = {"ts": "int64", "p_up": "float32", "p_conf": "float32",
          "side": "int8", "fire": "bool"}
 
 
-def path(symbol: str):
+def path(symbol: str):           # static, precomputed historical signals
     return SIG_DIR / f"signals_{symbol.lower()}.parquet"
+
+
+def path_live(symbol: str):      # small append-only file for live (this-session) signals
+    return SIG_DIR / f"signals_{symbol.lower()}_live.parquet"
 
 
 def precompute(symbols=("NQ", "ES")):
@@ -46,22 +50,24 @@ def precompute(symbols=("NQ", "ES")):
 
 
 def load(symbol: str, frm: int | None = None, to: int | None = None) -> pd.DataFrame:
-    """Stored signals overlapping [frm, to] (unix seconds). Empty frame if none."""
-    p = path(symbol)
-    if not p.exists():
+    """Historical + live signals overlapping [frm, to] (unix seconds), live winning
+    on ts collisions. Empty frame if none."""
+    parts = [pd.read_parquet(p) for p in (path(symbol), path_live(symbol)) if p.exists()]
+    if not parts:
         return pd.DataFrame(columns=list(_COLS))
-    df = pd.read_parquet(p)
+    df = pd.concat(parts, ignore_index=True).drop_duplicates("ts", keep="last")
     if frm is not None:
         df = df[df["ts"] >= int(frm)]
     if to is not None:
         df = df[df["ts"] <= int(to)]
-    return df
+    return df.sort_values("ts")
 
 
 def append(symbol: str, row: dict):
-    """Append one live signal (dedup on ts, newest wins). Used by the live engine."""
+    """Append one live signal to the small live file (dedup on ts, newest wins).
+    The big historical file is never rewritten on the hot path."""
     SIG_DIR.mkdir(exist_ok=True)
-    p = path(symbol)
+    p = path_live(symbol)
     new = pd.DataFrame([row]).astype(_COLS)
     if p.exists():
         old = pd.read_parquet(p)

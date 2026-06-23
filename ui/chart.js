@@ -156,8 +156,10 @@
       redrawLevels();
       tickCountdown();
       scheduleLvFetch();
+      scheduleScoreFetch();
       scheduleRangeSave();
     });
+    wireScore();
     chart.subscribeCrosshairMove(function (param) {
       var b;
       if (param && param.time) {
@@ -428,6 +430,7 @@
       if (lv) { lv.swept = true; if (ev.at) lv.end = ev.at; redrawLevels(); }
       scheduleMid();
     } else if (ev.e === 'reconciled') { scheduleLvFetch(); scheduleMid(); }
+    else if (ev.e === 'model_score') applyScore(ev);
   }
   function applyLiveBar(ev) {
     var b = ev.bar;
@@ -514,6 +517,87 @@
     }).catch(function () {});
   }
   function scheduleLvFetch() { clearTimeout(lvFetchT); lvFetchT = setTimeout(maybeFetchLevels, 300); }
+
+  // ─────────────────── model signals (Stage-1 score + fire) ───────────────────
+  // Historical signals (current model scored on every past bar) come from
+  // /api/scores per visible range; live signals arrive on the `model_score` WS
+  // event as bars close. Drawn as fire markers on candles + a p(up) oscillator in
+  // a bottom band of the synced overlay. 1-minute timeframe only (model cadence).
+  var SCORE = (function () {
+    var s = JSON.parse(localStorage.getItem('cxscore') || 'null') || {};
+    return { on: s.on !== false, h: s.h || 74 };
+  })();
+  var scoreData = [], scoreCache = { key: null, from: 0, to: 0 }, scoreReq = 0, scoreFetchT = 0;
+
+  function scheduleScoreFetch() { clearTimeout(scoreFetchT); scoreFetchT = setTimeout(maybeFetchScores, 300); }
+  function maybeFetchScores() {
+    if (!SCORE.on || S.tf !== '1m' || !bars.length || !candle) {
+      scoreData = []; scoreCache = { key: null, from: 0, to: 0 };
+      if (candle) candle.setMarkers([]); redrawLevels(); return;
+    }
+    var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
+    var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
+    if (S.sym === scoreCache.key && vfrom >= scoreCache.from && vto <= scoreCache.to) return;
+    var pad = Math.max(vto - vfrom, 7200), my = ++scoreReq;
+    var u = new URL('/api/scores/' + S.sym, location.origin);
+    u.searchParams.set('from', Math.floor(vfrom - pad)); u.searchParams.set('to', Math.ceil(vto + pad));
+    fetch(u).then(function (r) { return r.json(); }).then(function (d) {
+      if (my !== scoreReq) return;
+      scoreData = d.scores || [];
+      scoreCache = { key: S.sym, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
+      updateScoreMarkers(); redrawLevels();
+    }).catch(function () {});
+  }
+  function updateScoreMarkers() {
+    if (!candle) return;
+    if (!SCORE.on || S.tf !== '1m' || !bars.length) { candle.setMarkers([]); return; }
+    var lo = bars[0].time, hi = bars[bars.length - 1].time, mk = [];
+    for (var i = 0; i < scoreData.length; i++) {
+      var s = scoreData[i];
+      if (!s.fire || s.time < lo || s.time > hi) continue;
+      mk.push({ time: s.time, position: s.side === 1 ? 'belowBar' : 'aboveBar',
+                color: s.side === 1 ? S.up : S.down, shape: s.side === 1 ? 'arrowUp' : 'arrowDown' });
+    }
+    candle.setMarkers(mk);
+  }
+  function applyScore(ev) {
+    if (S.tf !== '1m') return;
+    var row = { time: ev.time, p_up: ev.p_up, side: ev.side, fire: ev.fire }, done = false;
+    for (var i = scoreData.length - 1; i >= 0 && i >= scoreData.length - 6; i--) {
+      if (scoreData[i].time === ev.time) { scoreData[i] = row; done = true; break; }
+    }
+    if (!done) scoreData.push(row);
+    updateScoreMarkers(); redrawLevels();
+  }
+  function redrawScore(ctx, c, rightX) {
+    if (!SCORE.on || S.tf !== '1m' || !scoreData.length) return;
+    var H = c.clientHeight, band = SCORE.h, y0 = H - band, mid = y0 + band / 2, half = band / 2 - 4;
+    ctx.fillStyle = hexToRgba(S.theme === 'light' ? '#1b2433' : '#aebbd0', 0.06);
+    ctx.fillRect(0, y0, rightX, band);
+    ctx.strokeStyle = hexToRgba('#8892a4', 0.6); ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(rightX, mid); ctx.stroke(); ctx.setLineDash([]);
+    for (var i = 0; i < scoreData.length; i++) {
+      var s = scoreData[i], x = timeToX(s.time);
+      if (x == null || x < 0 || x > rightX) continue;
+      var dev = s.p_up - 0.5, h = Math.max(1, Math.abs(dev) * 2 * half), up = dev >= 0;
+      ctx.fillStyle = s.fire ? (s.side === 1 ? S.up : S.down)
+                             : hexToRgba(up ? S.up : S.down, 0.30);
+      ctx.fillRect(x - 0.6, up ? mid - h : mid, 1.4, h);
+    }
+    ctx.fillStyle = hexToRgba('#8892a4', 0.85); ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText('p(up)', 4, y0 + 11);
+  }
+  function wireScore() {
+    var b = $('cx-sig-toggle'); if (!b) return;
+    b.classList.toggle('active', SCORE.on);
+    b.onclick = function () {
+      SCORE.on = !SCORE.on;
+      localStorage.setItem('cxscore', JSON.stringify({ on: SCORE.on, h: SCORE.h }));
+      b.classList.toggle('active', SCORE.on);
+      if (SCORE.on) maybeFetchScores();
+      else { if (candle) candle.setMarkers([]); scoreData = []; scoreCache = { key: null, from: 0, to: 0 }; redrawLevels(); }
+    };
+  }
 
   // ── current midpoint (IBM): dotted line midway between the nearest unswept
   //    level above and the nearest unswept level below the latest price ──
@@ -609,6 +693,7 @@
         labels.push({ y: y, x: Math.min(x2, rightX) - 4, text: labelText(lv), color: col });
     });
     drawLabels(ctx, labels);
+    redrawScore(ctx, c, rightX);
   }
 
   // ── settings panel ──

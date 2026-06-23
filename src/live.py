@@ -24,7 +24,7 @@ import time
 import pandas as pd
 
 import config
-from src import data_loader, fetcher, liquidity, topstep
+from src import data_loader, fetcher, liquidity, topstep, score, signals
 
 log = logging.getLogger("live")
 NY = "America/New_York"
@@ -120,6 +120,8 @@ class LiveEngine:
         self.broadcast = broadcast       # callable(dict) -> push event to clients
         self.tick = tick_size or {}
         self.states = {s: SymbolState(s) for s in self.symbols}
+        self._last_pos = {}              # latest pos_in_bracket per symbol (for SMT partner)
+        self._score_window = 180_000     # ~125 days of 1m bars for live feature recompute
         self.hub = None
         self._stop = False
         self._opened = False
@@ -297,6 +299,27 @@ class LiveEngine:
             "low": bar["low"], "close": bar["close"], "volume": bar["volume"]}})
         data_loader.append_live_bar(symbol, bar, provisional=True)
         self._register_levels(symbol, bar)
+        try:
+            self._emit_score(symbol, bar)
+        except Exception:
+            log.exception("live: model score failed for %s", symbol)
+
+    def _emit_score(self, symbol, bar):
+        """On bar close: recompute base features over a rolling window, score with
+        the production model, broadcast + persist. ~150ms (benchmarked)."""
+        if not score.available():
+            return
+        df = data_loader.live_frame(symbol)
+        if len(df) < 10_000:                       # need warmup for ATR/EMA/levels
+            return
+        win = df.tail(self._score_window)
+        partner = next((p for p in self.symbols if p != symbol), None)
+        res = score.live_score(symbol, win, partner_pos=self._last_pos.get(partner, 0.0))
+        self._last_pos[symbol] = res["pos_in_bracket"]
+        self.broadcast({"e": "model_score", "sym": symbol, "time": bar["start"],
+                        "p_up": round(res["p_up"], 4), "side": res["side"], "fire": res["fire"]})
+        signals.append(symbol, {"ts": bar["start"], "p_up": res["p_up"],
+                                "p_conf": res["p_conf"], "side": res["side"], "fire": res["fire"]})
 
     def _register_levels(self, symbol, bar):
         dt = _et(bar["start"])

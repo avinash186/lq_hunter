@@ -71,3 +71,25 @@ def score(feat: pd.DataFrame, risk: np.ndarray, symbol_id: np.ndarray) -> pd.Dat
     out["fire"] = fire
     out["size"] = np.where(fire, 1.0, 0.0)
     return out
+
+
+def live_score(symbol: str, df: pd.DataFrame, partner_pos: float = 0.0) -> dict:
+    """Score the LATEST bar of a rolling-window frame ``df`` (naive-ET 1m OHLCV).
+    Builds base features over the window, scores the last row. ~150ms for ~120d.
+    Returns p_up/p_conf/side/fire plus pos_in_bracket (to feed the partner symbol)."""
+    from src import dataset
+    from src.features import technical, brackets
+    tick = config.TICK_SIZE.get(symbol.upper(), 0.25)
+    tech = technical.build(df)
+    bk = brackets.build(df, tick=tick)
+    geo = dataset._geometry(df, bk, tech["atr_slow"])
+    feat = pd.concat([geo, tech], axis=1).iloc[[-1]].copy()
+    feat["partner_pos_in_bracket"] = float(partner_pos)
+    sid = dataset._SYMBOL_ID.get(symbol.upper(), 0)
+    feat["symbol_id"] = sid
+    risk = np.array([float(dataset.DIR_K * tech["atr_fast"].iloc[-1])])
+    sc = score(feat, risk, np.array([sid]))
+    pos = geo["pos_in_bracket"].iloc[-1]
+    return {"p_up": float(sc["p_up"].iloc[0]), "p_conf": float(sc["p_conf"].iloc[0]),
+            "side": int(sc["side"].iloc[0]), "fire": bool(sc["fire"].iloc[0]),
+            "pos_in_bracket": float(pos) if pos == pos else 0.0}

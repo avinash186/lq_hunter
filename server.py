@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
-from src import data_loader, fetcher, liquidity, live
+from src import data_loader, fetcher, liquidity, live, signals
 
 app = FastAPI(title="lgbm-trader")
 app.add_middleware(GZipMiddleware, minimum_size=1024)   # compress bar payloads
@@ -234,6 +234,20 @@ def bars(symbol: str, tf: str = "1m", limit: int = 20000, before: int | None = N
     ]
     return JSONResponse({"symbol": symbol, "tf": tf, "has_more": bool(has_more),
                          "bars": bars_out})
+
+
+@app.get("/api/scores/{symbol}")
+def scores(symbol: str, frm: int = Query(..., alias="from"), to: int = Query(...)):
+    """Model signals (historical + live) overlapping the unix-second window
+    [from, to] — fetched per visible range like /api/levels. Each:
+    {time, p_up (directional score 0-1), side (1 long/0 short), fire (meta gate)}."""
+    symbol = symbol.upper()
+    if symbol not in config.SYMBOLS:
+        return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
+    df = signals.load(symbol, int(frm), int(to))
+    out = [{"time": int(r.ts), "p_up": float(r.p_up), "side": int(r.side), "fire": bool(r.fire)}
+           for r in df.itertuples()]
+    return JSONResponse({"symbol": symbol, "scores": out})
 
 
 # ───────────────────────── live engine + WebSocket ─────────────────────────
