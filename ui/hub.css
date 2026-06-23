@@ -460,7 +460,7 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 .cx-signav:hover{color:var(--accent);border-color:var(--am);background:var(--ad)}
 #cx-sig-prev{right:130px}
 #cx-sig-next{right:164px}
-#cx-score-axis{position:absolute;left:0;width:26px;z-index:6;cursor:ns-resize;display:none}
+#cx-score-axis{position:absolute;left:0;width:30px;z-index:6;cursor:ns-resize;display:none;touch-action:none}
 .cx-sl-head{font-size:9.5px;color:var(--t3);margin:9px 0 6px}
 .cx-sl-row{display:flex;align-items:center;gap:5px;margin-bottom:7px}
 .cx-sl-name{font-size:11px;color:var(--t2);width:34px}

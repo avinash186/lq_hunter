@@ -548,7 +548,7 @@
   // a bottom band of the synced overlay. 1-minute timeframe only (model cadence).
   var VOL_FRAC = 0.11;                         // volume share of the plot height
   var SCORE = (function () {
-    var d = { on: true, band: 0.26, legendOp: 100, view: { lo: 0, hi: 1 },
+    var d = { on: true, band: 0.26, legendOp: 100, auto: true, view: { lo: 0, hi: 1 },
       lines: { mid:  { on: true, color: '#8892a4', width: 1, style: 'dashed' },
                up:   { on: true, color: '#26a69a', width: 1, style: 'dotted' },
                down: { on: true, color: '#ef5350', width: 1, style: 'dotted' } } };
@@ -557,13 +557,27 @@
       d.on = s.on !== false;
       if (s.band) d.band = s.band;
       if (s.legendOp != null) d.legendOp = s.legendOp;
+      if (typeof s.auto === 'boolean') d.auto = s.auto;
       if (s.view && typeof s.view.lo === 'number') d.view = s.view;
       ['mid', 'up', 'down'].forEach(function (k) { if (s.lines && s.lines[k]) Object.assign(d.lines[k], s.lines[k]); });
     }
     return d;
   })();
   function saveScore() { localStorage.setItem('cxscore', JSON.stringify(SCORE)); scheduleServerSave(); }
-  var scoreView = SCORE.view;                 // y-zoom of the score pane (persisted)
+  var scoreView = SCORE.view;                 // manual y-zoom (persisted, used when SCORE.auto=false)
+  var curView = { lo: 0, hi: 1 };             // the view actually drawn (auto or manual)
+  // Auto-fit: visible data + the threshold lines fill ~75% of the pane; the
+  // threshold span is always included so we never over-zoom.
+  function computeAutoView(rightX) {
+    var lo = Math.min(scoreGate.short, 0.5), hi = Math.max(scoreGate.long, 0.5);
+    for (var i = 0; i < scoreData.length; i++) {
+      var s = scoreData[i]; if (s.time === formingTime) continue;
+      var x = timeToX(s.time); if (x == null || x < 0 || x > rightX) continue;
+      if (s.p_up < lo) lo = s.p_up; if (s.p_up > hi) hi = s.p_up;
+    }
+    var pad = Math.max(hi - lo, 0.06) * ((1 / 0.75) - 1) / 2;   // data ≈ 75% of pane
+    return { lo: Math.max(0, lo - pad), hi: Math.min(1, hi + pad) };
+  }
   // up/down line VALUES come from the model's own gate (server), not editable;
   // mid is fixed at 0.5. Only line on/off + color/width/style are user settings.
   var scoreGate = { long: 0.65, short: 0.35 };
@@ -647,7 +661,9 @@
     var plotH = c.clientHeight - axisH;
     var band = plotH * SCORE.band, y1 = plotH, y0 = plotH - band;
     scoreGeom = { y0: y0, y1: y1, band: band }; positionScoreAxis();
-    var lo = scoreView.lo, hi = scoreView.hi, rng = (hi - lo) || 1;
+    var view = SCORE.auto ? computeAutoView(rightX) : scoreView;   // auto-fit by default
+    curView = view;
+    var lo = view.lo, hi = view.hi, rng = (hi - lo) || 1;
     var yFor = function (p) { return y1 - ((p - lo) / rng) * band; };
     var bg = S.theme === 'light' ? '#ffffff' : '#080a12';
     // opaque background over the band — hides any candle/level that bleeds in
@@ -699,17 +715,36 @@
   // drag the LEFT y-axis to zoom the score scale; double-click resets to 0–1
   function wireScoreAxis() {
     var ax = $('cx-score-axis'); if (!ax || ax._wired) return; ax._wired = true;
-    var dragging = false;
-    ax.addEventListener('mousedown', function (e) { dragging = true; e.preventDefault(); });
-    window.addEventListener('mousemove', function (e) {
-      if (!dragging) return;
+    var dragging = false, lastY = 0, lastTap = 0;
+    function beginDrag(y) {
+      // first manual drag: seed the manual range from the current auto view, switch off auto
+      if (SCORE.auto) { scoreView.lo = curView.lo; scoreView.hi = curView.hi; SCORE.auto = false; }
+      dragging = true; lastY = y;
+    }
+    function zoom(dy) {
       var c = (scoreView.lo + scoreView.hi) / 2, half = (scoreView.hi - scoreView.lo) / 2;
-      half = Math.max(0.03, Math.min(0.5, half * (1 + e.movementY * 0.004)));
+      half = Math.max(0.03, Math.min(0.5, half * (1 + dy * 0.004)));
       scoreView.lo = Math.max(0, c - half); scoreView.hi = Math.min(1, c + half);
       redrawLevels();
-    });
+    }
+    function resetAuto() { SCORE.auto = true; saveScore(); redrawLevels(); }
+    // mouse
+    ax.addEventListener('mousedown', function (e) { beginDrag(e.clientY); e.preventDefault(); });
+    window.addEventListener('mousemove', function (e) { if (dragging) zoom(e.movementY); });
     window.addEventListener('mouseup', function () { if (dragging) { dragging = false; saveScore(); } });
-    ax.addEventListener('dblclick', function () { scoreView.lo = 0; scoreView.hi = 1; saveScore(); redrawLevels(); });
+    ax.addEventListener('dblclick', resetAuto);
+    // touch (mobile) — double-tap resets to auto-fit
+    ax.addEventListener('touchstart', function (e) {
+      var now = Date.now();
+      if (now - lastTap < 300) { resetAuto(); lastTap = 0; e.preventDefault(); return; }
+      lastTap = now;
+      if (e.touches.length) { beginDrag(e.touches[0].clientY); e.preventDefault(); }
+    }, { passive: false });
+    ax.addEventListener('touchmove', function (e) {
+      if (!dragging || !e.touches.length) return;
+      var y = e.touches[0].clientY; zoom(y - lastY); lastY = y; e.preventDefault();
+    }, { passive: false });
+    ax.addEventListener('touchend', function () { if (dragging) { dragging = false; saveScore(); } });
   }
   // prev/next: scroll to the nearest fired signal within the loaded bars
   function loadFired(sym) {
