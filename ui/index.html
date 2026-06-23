@@ -86,6 +86,9 @@
         <div class="cx-loading" id="cx-loading">Loading…</div>
         <button class="cx-latest" id="cx-latest" title="Go to latest bar">L</button>
         <button class="cx-fit" id="cx-fit" title="Fit data to screen">A</button>
+        <button class="cx-signav" id="cx-sig-prev" title="Jump to previous signal">&#8249;</button>
+        <button class="cx-signav" id="cx-sig-next" title="Jump to next signal">&#8250;</button>
+        <div id="cx-score-axis" title="Drag to zoom the score scale · double-click to reset"></div>
         <div class="cx-settings" id="cx-settings">
           <div class="cx-set-title">Chart Settings</div>
           <div class="cx-set-row"><label>Up color</label><input type="color" id="cx-up" value="#26a69a"></div>
@@ -93,6 +96,13 @@
           <div class="cx-set-row"><label>Gridlines</label><input type="checkbox" id="cx-grid" checked></div>
           <div class="cx-set-row"><label>Show volume</label><input type="checkbox" id="cx-vol-check" checked></div>
           <div class="cx-set-row"><label>Vol opacity</label><input type="range" id="cx-vol-op" min="0" max="100" value="55"><span class="cx-set-op-val" id="cx-vol-op-val">55%</span></div>
+          <div class="cx-set-title" style="margin-top:16px">Signal Pane</div>
+          <div class="cx-set-row"><label>Pane size</label><input type="range" id="cx-score-band" min="10" max="50"><span class="cx-set-op-val" id="cx-score-band-val"></span></div>
+          <div class="cx-set-row"><label>Legend opacity</label><input type="range" id="cx-leg-op" min="20" max="100"><span class="cx-set-op-val" id="cx-leg-op-val"></span></div>
+          <div class="cx-sl-head">line · value · color · width · style</div>
+          <div class="cx-sl-row"><input type="checkbox" id="cx-sl-mid-on"><span class="cx-sl-name">Mid</span><input type="number" class="cx-sl-v" id="cx-sl-mid-v" step="0.01" min="0" max="1"><input type="color" id="cx-sl-mid-color"><input type="number" class="cx-sl-w" id="cx-sl-mid-w" min="1" max="5"><select class="cx-sl-st" id="cx-sl-mid-style"><option value="solid">solid</option><option value="dashed">dash</option><option value="dotted">dot</option></select></div>
+          <div class="cx-sl-row"><input type="checkbox" id="cx-sl-up-on"><span class="cx-sl-name">Up</span><input type="number" class="cx-sl-v" id="cx-sl-up-v" step="0.01" min="0" max="1"><input type="color" id="cx-sl-up-color"><input type="number" class="cx-sl-w" id="cx-sl-up-w" min="1" max="5"><select class="cx-sl-st" id="cx-sl-up-style"><option value="solid">solid</option><option value="dashed">dash</option><option value="dotted">dot</option></select></div>
+          <div class="cx-sl-row"><input type="checkbox" id="cx-sl-down-on"><span class="cx-sl-name">Down</span><input type="number" class="cx-sl-v" id="cx-sl-down-v" step="0.01" min="0" max="1"><input type="color" id="cx-sl-down-color"><input type="number" class="cx-sl-w" id="cx-sl-down-w" min="1" max="5"><select class="cx-sl-st" id="cx-sl-down-style"><option value="solid">solid</option><option value="dashed">dash</option><option value="dotted">dot</option></select></div>
         </div>
         <div class="cx-levels-panel" id="cx-levels-panel">
           <div class="cx-lp-head"><span class="cx-set-title">Liquidity Levels</span><button class="cx-lp-x" id="cx-lp-x">&times;</button></div>

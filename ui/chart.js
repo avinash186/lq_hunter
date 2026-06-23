@@ -244,6 +244,7 @@
       scheduleLvFetch();
       applyScoreLayout();
       scheduleScoreFetch();
+      loadFired(S.sym);
       updateMidpoint();
       setLoading(false);
     }).catch(function () { if (my === reqId) setLoading(false); });
@@ -447,6 +448,7 @@
   }
   function applyLiveBar(ev) {
     var b = ev.bar;
+    if (ev.e === 'tick' && b) formingTime = b.time;   // in-progress bar → blank in score pane
     if (S.tf === '1m') {
       candle.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
       volume.update({ time: b.time, value: b.volume, color: volColor(b) });
@@ -536,22 +538,40 @@
   // /api/scores per visible range; live signals arrive on the `model_score` WS
   // event as bars close. Drawn as fire markers on candles + a p(up) oscillator in
   // a bottom band of the synced overlay. 1-minute timeframe only (model cadence).
+  var VOL_FRAC = 0.11;                         // volume share of the plot height
   var SCORE = (function () {
-    var s = JSON.parse(localStorage.getItem('cxscore') || 'null') || {};
-    return { on: s.on !== false };
+    var d = { on: true, band: 0.26, legendOp: 100,
+      lines: { mid:  { on: true, v: 0.5,  color: '#8892a4', width: 1, style: 'dashed' },
+               up:   { on: true, v: 0.65, color: '#26a69a', width: 1, style: 'dotted' },
+               down: { on: true, v: 0.35, color: '#ef5350', width: 1, style: 'dotted' } } };
+    var s = JSON.parse(localStorage.getItem('cxscore') || 'null');
+    if (s) {
+      d.on = s.on !== false;
+      if (s.band) d.band = s.band;
+      if (s.legendOp != null) d.legendOp = s.legendOp;
+      ['mid', 'up', 'down'].forEach(function (k) { if (s.lines && s.lines[k]) Object.assign(d.lines[k], s.lines[k]); });
+    }
+    return d;
   })();
-  var BAND_FRAC = 0.24, VOL_FRAC = 0.11;   // score pane / volume share of the plot height
+  function saveScore() { localStorage.setItem('cxscore', JSON.stringify(SCORE)); }
+  var scoreView = { lo: 0, hi: 1 };           // y-zoom of the score pane (not persisted)
+  var formingTime = null;                     // ts of the in-progress bar (no signal yet)
+  var firedTimes = {};                        // {sym: [ts,...]} for the prev/next signal arrows
   var scoreData = [], scoreCache = { key: null, from: 0, to: 0 }, scoreReq = 0, scoreFetchT = 0;
+  var scoreGeom = null;                        // {y0,y1,band} px of the pane (for the y-axis drag zone)
 
   // Reserve a dedicated bottom band for the score pane: push price + volume up so
-  // nothing overlaps. Restore normal layout when the pane is off / not on 1m.
+  // candles/levels never overlap it. Restore normal layout when off / not on 1m.
   function applyScoreLayout() {
     if (!chart || !candle || !volume) return;
     var on = SCORE.on && S.tf === '1m';
     candle.priceScale().applyOptions({ scaleMargins: on
-      ? { top: 0.05, bottom: BAND_FRAC + VOL_FRAC } : { top: 0.08, bottom: 0.02 } });
+      ? { top: 0.05, bottom: SCORE.band + VOL_FRAC } : { top: 0.08, bottom: 0.02 } });
     volume.priceScale().applyOptions({ scaleMargins: on
-      ? { top: 1 - BAND_FRAC - VOL_FRAC, bottom: BAND_FRAC } : { top: 0.82, bottom: 0 } });
+      ? { top: 1 - SCORE.band - VOL_FRAC, bottom: SCORE.band } : { top: 0.82, bottom: 0 } });
+  }
+  function applyLegendOpacity() {
+    var el = $('cx-legend'); if (el) el.style.opacity = (SCORE.legendOp / 100).toFixed(2);
   }
 
   function scheduleScoreFetch() { clearTimeout(scoreFetchT); scoreFetchT = setTimeout(maybeFetchScores, 300); }
@@ -594,52 +614,130 @@
     if (!done) scoreData.push(row);
     updateScoreMarkers(); redrawLevels();
   }
+  function lineDash(style) { return style === 'dotted' ? [2, 3] : style === 'dashed' ? [6, 4] : []; }
+  function niceTicks(lo, hi) {
+    var out = [], step = (hi - lo) >= 0.5 ? 0.25 : (hi - lo) >= 0.2 ? 0.1 : 0.05;
+    for (var v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(Math.round(v * 100) / 100);
+    return out;
+  }
+  function positionScoreAxis() {
+    var ax = $('cx-score-axis'); if (!ax) return;
+    if (!scoreGeom || !SCORE.on || S.tf !== '1m') { ax.style.display = 'none'; return; }
+    ax.style.display = 'block';
+    ax.style.top = Math.round(scoreGeom.y0) + 'px';
+    ax.style.height = Math.round(scoreGeom.band) + 'px';
+  }
   function redrawScore(ctx, c, rightX) {
-    if (!SCORE.on || S.tf !== '1m' || !scoreData.length) return;
+    if (!SCORE.on || S.tf !== '1m') { scoreGeom = null; positionScoreAxis(); return; }
     var axisH = chart.timeScale().height() || 28;
-    var plotH = c.clientHeight - axisH;          // exclude the time-axis strip
-    var band = plotH * BAND_FRAC;
-    var y1 = plotH, y0 = plotH - band, mid = (y0 + y1) / 2;
-    var yFor = function (p) { return y1 - p * band; };     // p in [0,1] -> y
-    // pane background + top separator
-    ctx.fillStyle = hexToRgba(S.theme === 'light' ? '#1b2433' : '#aebbd0', 0.05);
-    ctx.fillRect(0, y0, rightX, band);
-    ctx.setLineDash([]); ctx.lineWidth = 1;
-    ctx.strokeStyle = hexToRgba('#8892a4', 0.35);
-    ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(rightX, y0); ctx.stroke();
-    // y gridlines (0 / 0.5 / 1), 0.5 brighter
-    ctx.setLineDash([2, 3]);
-    [0.0, 0.5, 1.0].forEach(function (p) {
-      ctx.strokeStyle = hexToRgba('#8892a4', p === 0.5 ? 0.5 : 0.2);
-      var yy = yFor(p); ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(rightX, yy); ctx.stroke();
+    var plotH = c.clientHeight - axisH;
+    var band = plotH * SCORE.band, y1 = plotH, y0 = plotH - band;
+    scoreGeom = { y0: y0, y1: y1, band: band }; positionScoreAxis();
+    var lo = scoreView.lo, hi = scoreView.hi, rng = (hi - lo) || 1;
+    var yFor = function (p) { return y1 - ((p - lo) / rng) * band; };
+    var bg = S.theme === 'light' ? '#ffffff' : '#080a12';
+    // opaque background over the band — hides any candle/level that bleeds in
+    ctx.fillStyle = bg; ctx.fillRect(0, y0, rightX, band);
+    ctx.setLineDash([]); ctx.lineWidth = 1; ctx.strokeStyle = hexToRgba('#8892a4', 0.4);
+    ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(rightX, y0); ctx.stroke();   // top separator
+    // configurable reference lines (mid / up / down)
+    ['mid', 'up', 'down'].forEach(function (k) {
+      var ln = SCORE.lines[k]; if (!ln.on || ln.v < lo || ln.v > hi) return;
+      var yy = yFor(ln.v);
+      ctx.strokeStyle = ln.color; ctx.lineWidth = ln.width || 1; ctx.setLineDash(lineDash(ln.style));
+      ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(rightX, yy); ctx.stroke();
     });
     ctx.setLineDash([]);
-    // p(up) columns from the 0.5 line (fired = solid, else faint)
+    // p(up) columns from 0.5 (fired = solid, else faint); skip the forming bar
+    var mid05 = yFor(0.5);
     for (var i = 0; i < scoreData.length; i++) {
-      var s = scoreData[i], x = timeToX(s.time);
-      if (x == null || x < 0 || x > rightX) continue;
-      var yv = yFor(s.p_up), up = s.p_up >= 0.5;
+      var s = scoreData[i]; if (s.time === formingTime) continue;
+      var x = timeToX(s.time); if (x == null || x < 0 || x > rightX) continue;
+      var yv = Math.max(y0, Math.min(y1, yFor(s.p_up))), up = s.p_up >= 0.5;
       ctx.fillStyle = s.fire ? (s.side === 1 ? S.up : S.down) : hexToRgba(up ? S.up : S.down, 0.3);
-      ctx.fillRect(x - 0.6, Math.min(mid, yv), 1.4, Math.max(1, Math.abs(yv - mid)));
+      ctx.fillRect(x - 0.6, Math.min(mid05, yv), 1.4, Math.max(1, Math.abs(yv - mid05)));
     }
-    // y-axis labels (in the right gutter) + pane title
-    ctx.fillStyle = hexToRgba('#8892a4', 0.9); ctx.font = '9px system-ui'; ctx.textAlign = 'left';
-    ctx.fillText('1.0', rightX + 4, yFor(1.0) + 8);
-    ctx.fillText('0.5', rightX + 4, yFor(0.5) + 3);
-    ctx.fillText('0.0', rightX + 4, yFor(0.0) - 2);
-    ctx.fillText('p(up)', 4, y0 + 11);
+    // LEFT y-axis labels (chips so columns don't obscure them) + pane title
+    ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+    niceTicks(lo, hi).forEach(function (p) {
+      var yy = yFor(p); if (yy < y0 - 1 || yy > y1 + 1) return;
+      ctx.fillStyle = bg; ctx.fillRect(0, yy - 6, 22, 12);
+      ctx.fillStyle = hexToRgba('#8892a4', 0.95); ctx.fillText(p.toFixed(2), 2, yy + 3);
+    });
+    ctx.fillStyle = hexToRgba('#8892a4', 0.9); ctx.fillText('p(up)', 26, y0 + 11);
   }
   function wireScore() {
-    var b = $('cx-sig-toggle'); if (!b) return;
-    b.classList.toggle('active', SCORE.on);
-    b.onclick = function () {
-      SCORE.on = !SCORE.on;
-      localStorage.setItem('cxscore', JSON.stringify({ on: SCORE.on, h: SCORE.h }));
+    var b = $('cx-sig-toggle');
+    if (b) {
       b.classList.toggle('active', SCORE.on);
-      applyScoreLayout();
-      if (SCORE.on) maybeFetchScores();
-      else { if (candle) candle.setMarkers([]); scoreData = []; scoreCache = { key: null, from: 0, to: 0 }; redrawLevels(); }
-    };
+      b.onclick = function () {
+        SCORE.on = !SCORE.on; saveScore();
+        b.classList.toggle('active', SCORE.on);
+        applyScoreLayout();
+        if (SCORE.on) maybeFetchScores();
+        else { if (candle) candle.setMarkers([]); scoreData = []; scoreCache = { key: null, from: 0, to: 0 }; positionScoreAxis(); redrawLevels(); }
+      };
+    }
+    applyLegendOpacity(); wireScoreAxis(); wireScoreNav(); wireScoreSettings();
+  }
+  // drag the LEFT y-axis to zoom the score scale; double-click resets to 0–1
+  function wireScoreAxis() {
+    var ax = $('cx-score-axis'); if (!ax || ax._wired) return; ax._wired = true;
+    var dragging = false;
+    ax.addEventListener('mousedown', function (e) { dragging = true; e.preventDefault(); });
+    window.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      var c = (scoreView.lo + scoreView.hi) / 2, half = (scoreView.hi - scoreView.lo) / 2;
+      half = Math.max(0.03, Math.min(0.5, half * (1 + e.movementY * 0.004)));
+      scoreView.lo = Math.max(0, c - half); scoreView.hi = Math.min(1, c + half);
+      redrawLevels();
+    });
+    window.addEventListener('mouseup', function () { dragging = false; });
+    ax.addEventListener('dblclick', function () { scoreView = { lo: 0, hi: 1 }; redrawLevels(); });
+  }
+  // prev/next: scroll to the nearest fired signal within the loaded bars
+  function loadFired(sym) {
+    var u = new URL('/api/scores/' + sym, location.origin); u.searchParams.set('fired', '1');
+    fetch(u).then(function (r) { return r.json(); }).then(function (d) {
+      firedTimes[sym] = (d.scores || []).map(function (s) { return s.time; });
+    }).catch(function () {});
+  }
+  function navSig(dir) {
+    var arr = firedTimes[S.sym]; if (!arr || !arr.length || !bars.length) return;
+    var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
+    var c = (vr.from + vr.to) / 2, w = vr.to - vr.from;
+    var lo = bars[0].time, hi = bars[bars.length - 1].time, target = null, i;
+    if (dir > 0) { for (i = 0; i < arr.length; i++) if (arr[i] > c + 1 && arr[i] <= hi) { target = arr[i]; break; } }
+    else { for (i = arr.length - 1; i >= 0; i--) if (arr[i] < c - 1 && arr[i] >= lo) { target = arr[i]; break; } }
+    if (target == null) return;
+    chart.timeScale().setVisibleRange({ from: Math.round(target - w / 2), to: Math.round(target + w / 2) });
+  }
+  function wireScoreNav() {
+    var p = $('cx-sig-prev'), n = $('cx-sig-next');
+    if (p) p.onclick = function () { navSig(-1); };
+    if (n) n.onclick = function () { navSig(1); };
+  }
+  function wireScoreSettings() {
+    var band = $('cx-score-band');
+    if (band) {
+      band.value = Math.round(SCORE.band * 100); $('cx-score-band-val').textContent = Math.round(SCORE.band * 100) + '%';
+      band.oninput = function () { SCORE.band = Math.max(0.1, Math.min(0.5, +this.value / 100)); $('cx-score-band-val').textContent = Math.round(SCORE.band * 100) + '%'; saveScore(); applyScoreLayout(); redrawLevels(); };
+    }
+    var lop = $('cx-leg-op');
+    if (lop) {
+      lop.value = SCORE.legendOp; $('cx-leg-op-val').textContent = SCORE.legendOp + '%';
+      lop.oninput = function () { SCORE.legendOp = +this.value; $('cx-leg-op-val').textContent = SCORE.legendOp + '%'; saveScore(); applyLegendOpacity(); };
+    }
+    ['mid', 'up', 'down'].forEach(function (k) {
+      var ln = SCORE.lines[k];
+      var on = $('cx-sl-' + k + '-on'), v = $('cx-sl-' + k + '-v'), col = $('cx-sl-' + k + '-color'),
+          w = $('cx-sl-' + k + '-w'), st = $('cx-sl-' + k + '-style');
+      if (on) { on.checked = ln.on; on.onchange = function () { ln.on = this.checked; saveScore(); redrawLevels(); }; }
+      if (v) { v.value = ln.v; v.oninput = function () { ln.v = Math.max(0, Math.min(1, +this.value || 0)); saveScore(); redrawLevels(); }; }
+      if (col) { col.value = ln.color; col.oninput = function () { ln.color = this.value; saveScore(); redrawLevels(); }; }
+      if (w) { w.value = ln.width; w.oninput = function () { ln.width = Math.max(1, +this.value || 1); saveScore(); redrawLevels(); }; }
+      if (st) { st.value = ln.style; st.onchange = function () { ln.style = this.value; saveScore(); redrawLevels(); }; }
+    });
   }
 
   // ── current midpoint (IBM): dotted line midway between the nearest unswept
