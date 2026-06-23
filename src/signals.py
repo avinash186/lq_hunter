@@ -22,6 +22,16 @@ from src import dataset, score
 SIG_DIR = config.DATA_DIR / "signals"
 _COLS = {"ts": "int64", "p_up": "float32", "p_conf": "float32",
          "side": "int8", "fire": "bool"}
+_EPOCH = pd.Timestamp("1970-01-01")
+
+
+def _to_etnaive(ts_utc: pd.Series) -> np.ndarray:
+    """dataset.assemble() emits true-UTC epoch seconds, but the chart (/api/bars)
+    and the live store use ET-naive epoch (Eastern wall-clock as if UTC). Convert
+    UTC-epoch -> ET-naive epoch so stored signals align with the bars."""
+    et = (pd.to_datetime(np.asarray(ts_utc), unit="s", utc=True)
+          .tz_convert("America/New_York").tz_localize(None))
+    return ((et - _EPOCH) // pd.Timedelta(seconds=1)).to_numpy().astype("int64")
 
 
 def path(symbol: str):           # static, precomputed historical signals
@@ -39,6 +49,7 @@ def precompute(symbols=("NQ", "ES")):
         raise RuntimeError("No production model — run src/train_production.py first.")
     d = dataset.assemble(symbols)
     d = d[d["pos_in_bracket"].notna()].reset_index(drop=True)
+    d["ts"] = _to_etnaive(d["ts"])               # store ET-naive (match chart + live)
     sc = score.score(d, d["dir_risk"].to_numpy(), d["symbol_id"].to_numpy())
     d = d.assign(p_up=sc["p_up"].to_numpy(), p_conf=sc["p_conf"].to_numpy(),
                  side=sc["side"].to_numpy(), fire=sc["fire"].to_numpy())
@@ -90,6 +101,7 @@ def backfill(symbols=("NQ", "ES")) -> dict:
     # gaps exist → build features once, score ONLY unscored scoreable bars
     d = dataset.assemble(symbols)
     d = d[d["pos_in_bracket"].notna()].reset_index(drop=True)
+    d["ts"] = _to_etnaive(d["ts"])               # store ET-naive (match chart + live)
     added: dict = {}
     for s in symbols:
         have = _scored_ts(s)

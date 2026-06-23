@@ -689,14 +689,15 @@
       ctx.fillStyle = s.fire ? (s.side === 1 ? S.up : S.down) : hexToRgba(up ? S.up : S.down, 0.3);
       ctx.fillRect(x - 0.6, Math.min(mid05, yv), 1.4, Math.max(1, Math.abs(yv - mid05)));
     }
-    // LEFT y-axis labels (chips so columns don't obscure them) + pane title
+    // RIGHT y-axis labels, drawn in the price gutter but only across the pane's
+    // band — the price axis occupies the candle region above, so they never overlap.
     ctx.font = '9px system-ui'; ctx.textAlign = 'left';
     niceTicks(lo, hi).forEach(function (p) {
       var yy = yFor(p); if (yy < y0 - 1 || yy > y1 + 1) return;
-      ctx.fillStyle = bg; ctx.fillRect(0, yy - 6, 22, 12);
-      ctx.fillStyle = hexToRgba('#8892a4', 0.95); ctx.fillText(p.toFixed(2), 2, yy + 3);
+      ctx.fillStyle = bg; ctx.fillRect(rightX + 1, yy - 6, 36, 12);
+      ctx.fillStyle = hexToRgba('#8892a4', 0.95); ctx.fillText(p.toFixed(2), rightX + 4, yy + 3);
     });
-    ctx.fillStyle = hexToRgba('#8892a4', 0.9); ctx.fillText('p(up)', 26, y0 + 11);
+    ctx.fillStyle = hexToRgba('#8892a4', 0.9); ctx.fillText('p(up)', 4, y0 + 11);
   }
   function wireScore() {
     var b = $('cx-sig-toggle');
