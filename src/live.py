@@ -400,3 +400,14 @@ class LiveEngine:
                 self._rebuild_active(s)
         except Exception:
             log.exception("live: flush failed")
+        # Self-heal score gaps now that the latest official bars are on disk: the
+        # boot backfill can race TopStep's ~1-min data lag and miss the trailing
+        # minute(s) of a downtime gap. backfill() is gap-gated (cheap no-op when the
+        # store is current) so this is safe to run every cycle. Skip on shutdown.
+        if config.BACKFILL_ON_START and not force:
+            try:
+                added = signals.backfill(self.symbols)
+                if sum(added.values()):
+                    log.info("live: flush backfilled missing scores %s", added)
+            except Exception:
+                log.exception("live: flush backfill failed (continuing)")
