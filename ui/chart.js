@@ -654,13 +654,17 @@
     ax.style.display = 'block';
     ax.style.top = Math.round(scoreGeom.y0) + 'px';
     ax.style.height = Math.round(scoreGeom.band) + 'px';
+    // cover the ENTIRE band-region price gutter so a drag there is captured here
+    // (zooms the score) and never reaches LWC's price scale (which would rescale price)
+    ax.style.left = Math.round(scoreGeom.rightX) + 'px';
+    ax.style.width = Math.max(0, Math.round(scoreGeom.fullW - scoreGeom.rightX)) + 'px';
   }
   function redrawScore(ctx, c, rightX) {
     if (!SCORE.on || S.tf !== '1m') { scoreGeom = null; positionScoreAxis(); return; }
     var axisH = chart.timeScale().height() || 28;
     var plotH = c.clientHeight - axisH;
     var band = plotH * SCORE.band, y1 = plotH, y0 = plotH - band;
-    scoreGeom = { y0: y0, y1: y1, band: band }; positionScoreAxis();
+    scoreGeom = { y0: y0, y1: y1, band: band, rightX: rightX, fullW: c.clientWidth }; positionScoreAxis();
     var view = SCORE.auto ? computeAutoView(rightX) : scoreView;   // auto-fit by default
     curView = view;
     var lo = view.lo, hi = view.hi, rng = (hi - lo) || 1;
