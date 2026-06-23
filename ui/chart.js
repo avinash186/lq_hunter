@@ -13,6 +13,10 @@
     volOn: true, volOpacity: 55, theme: 'dark', grid: true,
   }, JSON.parse(localStorage.getItem('cx') || '{}'));
   function save() { localStorage.setItem('cx', JSON.stringify(S)); scheduleServerSave(); }
+  // Flush to the server NOW (no debounce) — used for discrete, must-persist choices
+  // like symbol/timeframe so they survive a relaunch even on a fresh cloudflared
+  // origin (where localStorage is empty and the server is the only source of truth).
+  function saveNow() { localStorage.setItem('cx', JSON.stringify(S)); clearTimeout(srvSaveT); saveServer(); }
 
   // Settings persist server-side (survives the changing cloudflared URL).
   var srvSaveT = 0;
@@ -379,10 +383,10 @@
   }
   function wireControls() {
     document.querySelectorAll('.cx-sym').forEach(function (b) {
-      b.onclick = function () { S.sym = b.getAttribute('data-sym'); save(); syncControls(); load(); };
+      b.onclick = function () { S.sym = b.getAttribute('data-sym'); saveNow(); syncControls(); load(); };
     });
     document.querySelectorAll('.cx-tf').forEach(function (b) {
-      b.onclick = function () { S.tf = b.getAttribute('data-tf'); save(); syncControls(); load(); };
+      b.onclick = function () { S.tf = b.getAttribute('data-tf'); saveNow(); syncControls(); load(); };
     });
     $('cx-fit').onclick = function () { chart.timeScale().fitContent(); };
     $('cx-latest').onclick = function () { chart.timeScale().scrollToRealTime(); };
