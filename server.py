@@ -52,14 +52,15 @@ def _epoch_secs(ts) -> int:
 _NEAREST: dict[tuple, dict] = {}
 
 
-def _nearest_cached(symbol: str, n: int, tset, tick: float, confirm: int = 0) -> dict:
+def _nearest_cached(symbol: str, n: int, tset, tick: float, confirm: int = 0,
+                    max_tier: int | None = None) -> dict:
     df = data_loader.live_frame(symbol)
     last = int(df.index[-1].value) if len(df) else 0
-    key = (symbol, last, n, tuple(sorted(tset)) if tset else "all", confirm)
+    key = (symbol, last, n, tuple(sorted(tset)) if tset else "all", confirm, max_tier)
     if key not in _NEAREST:
         if len(_NEAREST) > 8:                 # bounded cache (avoid thrash across n/types)
             _NEAREST.clear()
-        _NEAREST[key] = liquidity.nearest(df, n, tset, tick, confirm)
+        _NEAREST[key] = liquidity.nearest(df, n, tset, tick, confirm, max_tier)
     return _NEAREST[key]
 
 
@@ -174,7 +175,10 @@ def midpoint(symbol: str, types: str | None = None):
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
     tset = set(types.split(",")) if types else None
     tick = config.TICK_SIZE.get(symbol, 0.25)
-    out = _nearest_cached(symbol, 1, tset, tick, liquidity.MIDPOINT_CONFIRM_SECONDS)
+    # Bracket A/B is defined by tiers 1-4 only (Decision 2): the drawn IBM must
+    # match what the model computes, even if tier-5 "between" is toggled on.
+    out = _nearest_cached(symbol, 1, tset, tick, liquidity.MIDPOINT_CONFIRM_SECONDS,
+                          max_tier=liquidity.BRACKET_MAX_TIER)
     levels = out.get("levels", [])
     highs = [l["price"] for l in levels if l["side"] == "high"]
     lows = [l["price"] for l in levels if l["side"] == "low"]

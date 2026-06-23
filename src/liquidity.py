@@ -45,6 +45,13 @@ IB = (9 * 60 + 30, 10 * 60 + 30)   # initial balance: NY 09:30–10:30
 CONFIRM_SECONDS = 600              # 10 one-minute bars — general level creation
 MIDPOINT_CONFIRM_SECONDS = 900     # 15 min — stricter, for the current midpoint
 
+# Which tiers may DEFINE the immediate bracket A/B (and therefore the IBM
+# midpoint + the model's bracket). Per model_spec Decision 2 (2026-06-22): tiers
+# 1-4 (week, day, killzone, macro) define the bracket; tier-5 "between-macros" is
+# feature/display-only and must NOT anchor A/B — keeps the drawn IBM identical to
+# what the model computes. Display toggles still control what is *drawn*.
+BRACKET_MAX_TIER = 4
+
 # Compute levels over a window extended this far left of the requested `from`,
 # so still-active older levels (esp. weekly) appear. Weekly is approximated to
 # this lookback; everything else is well within it.
@@ -348,10 +355,14 @@ def _scan_unswept(df: pd.DataFrame, types: set[str], tick: float, confirm: int =
 
 
 def nearest(df: pd.DataFrame, n: int, types: set[str] | None = None,
-            tick: float = 0.25, confirm: int = 0) -> dict:
+            tick: float = 0.25, confirm: int = 0, max_tier: int | None = None) -> dict:
     """The ``n`` nearest unswept levels above and below the latest price.
-    ``confirm`` (secs) skips levels younger than that — see ``CONFIRM_SECONDS``."""
+    ``confirm`` (secs) skips levels younger than that — see ``CONFIRM_SECONDS``.
+    ``max_tier`` (e.g. ``BRACKET_MAX_TIER``) restricts candidates to tier <= it,
+    so bracket/IBM definition obeys Decision 2 regardless of display ``types``."""
     merged = _scan_unswept(df, types or set(TIER), tick, confirm)
+    if max_tier is not None:
+        merged = [l for l in merged if l["tier"] <= max_tier]
     hi = sorted((l for l in merged if l["side"] == "high"), key=lambda l: l["price"])[:n]
     lo = sorted((l for l in merged if l["side"] == "low"), key=lambda l: -l["price"])[:n]
     return {"levels": hi + lo, "zones": []}
