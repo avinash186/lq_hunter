@@ -183,6 +183,42 @@ def _api(method: str, **params: object) -> dict:
     return r.json()
 
 
+def _announce(url: str) -> None:
+    """Tell the owner the hub is live, then fan ONLY the link to extra recipients."""
+    notify.send(f"✅ Hub is live:\n{url}")
+    for cid in (c.strip() for c in config.TELEGRAM_HUB_RECIPIENTS.split(",")):
+        if cid:
+            notify.send_to(cid, f"✅ Hub link:\n{url}")
+
+
+def _auto_hub(hub: Hub) -> None:
+    """On launch: wait for the local UI to bind, raise a cloudflared tunnel,
+    announce + fan out the link, and open it in the browser. AUTO_HUB=0 disables."""
+    import webbrowser
+    if not config.AUTO_HUB:
+        return
+    for _ in range(120):                       # wait up to ~60s for uvicorn to bind
+        if _port_open(config.UI_HOST, config.UI_PORT):
+            break
+        time.sleep(0.5)
+    local = f"http://{config.UI_HOST}:{config.UI_PORT}"
+    try:
+        url = hub.restart()
+    except Exception as exc:                    # noqa: BLE001 — fall back to localhost
+        log.exception("auto-hub failed")
+        notify.send(f"⚠️ Auto-hub failed ({exc}). Local UI: {local}")
+        try:
+            webbrowser.open(local)
+        except Exception:
+            pass
+        return
+    _announce(url)
+    try:
+        webbrowser.open(url)
+    except Exception:
+        log.warning("could not open browser", exc_info=True)
+
+
 def _handle(cmd: str, hub: Hub) -> None:
     if cmd == "/hub":
         notify.send("🚀 (Re)starting the hub — killing any existing instance …")
@@ -192,11 +228,7 @@ def _handle(cmd: str, hub: Hub) -> None:
             log.exception("hub start failed")
             notify.send(f"❌ Failed to start the hub: {exc}")
             return
-        notify.send(f"✅ Hub is live:\n{url}")
-        # fan ONLY the hub link out to any extra recipients (numeric chat IDs)
-        for cid in (c.strip() for c in config.TELEGRAM_HUB_RECIPIENTS.split(",")):
-            if cid:
-                notify.send_to(cid, f"✅ Hub link:\n{url}")
+        _announce(url)
     elif cmd == "/fetch":
         notify.send("⏳ Fetching the latest bars from TopStep …")
         try:
@@ -235,6 +267,9 @@ def main() -> None:
 
     allowed = str(config.TELEGRAM_CHAT_ID)
     hub = Hub()
+
+    # On launch, raise the public tunnel + open/announce the link (AUTO_HUB).
+    Thread(target=_auto_hub, args=(hub,), name="auto-hub", daemon=True).start()
 
     # Skip any backlog so we don't replay old messages on startup.
     offset: int | None = None

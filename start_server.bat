@@ -15,12 +15,10 @@ timeout /t 2 >nul
 echo Checking dependencies (first run may take a minute)...
 python -m pip install -q -r requirements.txt
 echo.
-echo Starting... Local chart: http://127.0.0.1:8000
-echo Telegram: send /hub for a public link.  Close this window to stop.
+echo Starting... a public cloudflared link will open in your browser and be
+echo sent via Telegram automatically (set AUTO_HUB=0 in .env for localhost only).
+echo Close this window to stop.
 echo.
-
-rem open the local chart a few seconds after boot
-start "" /min cmd /c "timeout /t 8 >nul && start http://127.0.0.1:8000"
 
 python run.py
 

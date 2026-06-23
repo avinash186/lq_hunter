@@ -30,6 +30,10 @@ TELEGRAM_HUB_RECIPIENTS = os.getenv("TELEGRAM_HUB_RECIPIENTS", "")
 # ── Web UI ──
 UI_HOST = os.getenv("UI_HOST", "127.0.0.1")
 UI_PORT = int(os.getenv("UI_PORT", "8000"))
+# On launch, auto-raise a cloudflared tunnel, open the public link in the browser,
+# and send it via Telegram (instead of just opening localhost). Set AUTO_HUB=0 to
+# keep the old localhost-only behavior.
+AUTO_HUB = os.getenv("AUTO_HUB", "1").strip().lower() not in ("0", "false", "no", "")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
