@@ -666,10 +666,13 @@
     var lo = view.lo, hi = view.hi, rng = (hi - lo) || 1;
     var yFor = function (p) { return y1 - ((p - lo) / rng) * band; };
     var bg = S.theme === 'light' ? '#ffffff' : '#080a12';
-    // opaque background over the band — hides any candle/level that bleeds in
-    ctx.fillStyle = bg; ctx.fillRect(0, y0, rightX, band);
+    // opaque background over the band ACROSS THE FULL WIDTH (incl. the price gutter)
+    // — hides candles/levels that bleed in AND masks the price-axis labels in the
+    // band region, so the price axis visually ends at the pane's top border and the
+    // band gutter is exclusively the score axis. Tracks SCORE.band (pane size drag).
+    ctx.fillStyle = bg; ctx.fillRect(0, y0, c.clientWidth, band);
     ctx.setLineDash([]); ctx.lineWidth = 1; ctx.strokeStyle = hexToRgba('#8892a4', 0.4);
-    ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(rightX, y0); ctx.stroke();   // top separator
+    ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(c.clientWidth, y0); ctx.stroke();   // top separator (full width)
     // reference lines: mid fixed 0.5; up/down = the model's own gate (not editable)
     ['mid', 'up', 'down'].forEach(function (k) {
       var ln = SCORE.lines[k];
