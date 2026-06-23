@@ -619,7 +619,7 @@
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       if (my !== scoreReq) return;
       scoreData = d.scores || [];
-      if (d.gate) scoreGate = d.gate;
+      if (d.gate) { scoreGate = d.gate; updateThrLabels(); }
       scoreCache = { key: S.sym, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
       updateScoreMarkers(); redrawLevels();
     }).catch(function () {});
@@ -685,7 +685,7 @@
     ['mid', 'up', 'down'].forEach(function (k) {
       var ln = SCORE.lines[k];
       var val = k === 'mid' ? 0.5 : k === 'up' ? scoreGate.long : scoreGate.short;
-      if (!ln.on || val < lo || val > hi) return;
+      if ((k === 'mid' && !ln.on) || val < lo || val > hi) return;   // up/down (gate) always shown
       var yy = yFor(val);
       ctx.strokeStyle = ln.color; ctx.lineWidth = ln.width || 1; ctx.setLineDash(lineDash(ln.style));
       ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(rightX, yy); ctx.stroke();
@@ -703,11 +703,22 @@
     // RIGHT y-axis labels, drawn in the price gutter but only across the pane's
     // band — the price axis occupies the candle region above, so they never overlap.
     ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+    var thr = [scoreGate.long, scoreGate.short];          // skip regular ticks near a threshold
     niceTicks(lo, hi).forEach(function (p) {
       var yy = yFor(p); if (yy < y0 - 1 || yy > y1 + 1) return;
+      if (thr.some(function (t) { return Math.abs(t - p) < 0.02; })) return;
       ctx.fillStyle = bg; ctx.fillRect(rightX + 1, yy - 6, 36, 12);
       ctx.fillStyle = hexToRgba('#8892a4', 0.95); ctx.fillText(p.toFixed(2), rightX + 4, yy + 3);
     });
+    // model-gate threshold values, color-coded, at their line positions
+    ctx.font = 'bold 9px system-ui';
+    [['up', scoreGate.long], ['down', scoreGate.short]].forEach(function (t) {
+      var v = t[1]; if (v < lo || v > hi) return;
+      var yy = yFor(v);
+      ctx.fillStyle = bg; ctx.fillRect(rightX + 1, yy - 6, 36, 12);
+      ctx.fillStyle = SCORE.lines[t[0]].color; ctx.fillText(v.toFixed(2), rightX + 4, yy + 3);
+    });
+    ctx.font = '9px system-ui';
     ctx.fillStyle = hexToRgba('#8892a4', 0.9); ctx.fillText('p(up)', 4, y0 + 11);
   }
   function wireScore() {
@@ -791,15 +802,22 @@
       lop.value = SCORE.legendOp; $('cx-leg-op-val').textContent = SCORE.legendOp + '%';
       lop.oninput = function () { SCORE.legendOp = +this.value; $('cx-leg-op-val').textContent = SCORE.legendOp + '%'; saveScore(); applyLegendOpacity(); };
     }
-    ['mid', 'up', 'down'].forEach(function (k) {
-      var ln = SCORE.lines[k];
-      var on = $('cx-sl-' + k + '-on'), col = $('cx-sl-' + k + '-color'),
-          w = $('cx-sl-' + k + '-w'), st = $('cx-sl-' + k + '-style');
-      if (on) { on.checked = ln.on; on.onchange = function () { ln.on = this.checked; saveScore(); redrawLevels(); }; }
-      if (col) { col.value = ln.color; col.oninput = function () { ln.color = this.value; saveScore(); redrawLevels(); }; }
-      if (w) { w.value = ln.width; w.oninput = function () { ln.width = Math.max(1, +this.value || 1); saveScore(); redrawLevels(); }; }
-      if (st) { st.value = ln.style; st.onchange = function () { ln.style = this.value; saveScore(); redrawLevels(); }; }
-    });
+    // only the midline is adjustable; up/down are the fixed model gate
+    var ln = SCORE.lines.mid;
+    var on = $('cx-sl-mid-on'), col = $('cx-sl-mid-color'), w = $('cx-sl-mid-w'), st = $('cx-sl-mid-style');
+    if (on) { on.checked = ln.on; on.onchange = function () { ln.on = this.checked; saveScore(); redrawLevels(); }; }
+    if (col) { col.value = ln.color; col.oninput = function () { ln.color = this.value; saveScore(); redrawLevels(); }; }
+    if (w) { w.value = ln.width; w.oninput = function () { ln.width = Math.max(1, +this.value || 1); saveScore(); redrawLevels(); }; }
+    if (st) { st.value = ln.style; st.onchange = function () { ln.style = this.value; saveScore(); redrawLevels(); }; }
+    updateThrLabels();
+  }
+  // reflect the (per-symbol) model gate in the settings readout
+  function updateThrLabels() {
+    var u = $('cx-up-thr'), d = $('cx-down-thr'), us = $('cx-up-sw'), ds = $('cx-down-sw');
+    if (u) u.textContent = scoreGate.long.toFixed(3);
+    if (d) d.textContent = scoreGate.short.toFixed(3);
+    if (us) us.style.background = SCORE.lines.up.color;
+    if (ds) ds.style.background = SCORE.lines.down.color;
   }
 
   // ── current midpoint (IBM): dotted line midway between the nearest unswept

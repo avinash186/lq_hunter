@@ -470,6 +470,9 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 .cx-sl-row input[type=number]{background:var(--s3);border:1px solid var(--b1);border-radius:4px;color:var(--t1);font-size:11px;padding:2px 3px}
 .cx-sl-row input[type=color]{width:30px;height:22px;padding:0;border:1px solid var(--b1);border-radius:5px;background:none;cursor:pointer}
 .cx-sl-row select{background:var(--s3);border:1px solid var(--b1);border-radius:4px;color:var(--t1)}
+.cx-sl-thr{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--t2);margin-bottom:6px}
+.cx-sl-sw{width:10px;height:10px;border-radius:2px;flex-shrink:0}
+.cx-thr-val{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:700;color:var(--t1)}
 
 /* Liquidity levels panel */
 .cx-levels-panel{position:absolute;top:10px;right:62px;z-index:8;width:320px;max-height:calc(100% - 24px);overflow-y:auto;background:var(--s2);border:1px solid var(--b2);border-radius:var(--r);box-shadow:0 8px 28px rgba(0,0,0,.55);display:none}
