@@ -307,7 +307,6 @@
       '<span style="color:' + col + '">O <b>' + f(b.open) + '</b>  H <b>' + f(b.high) +
       '</b>  L <b>' + f(b.low) + '</b>  C <b>' + f(b.close) + '</b></span>' +
       '<span class="cx-leg-tf">Vol <b>' + f(b.volume) + '</b></span>' + sig;
-    el.style.opacity = ((SCORE.legendOp != null ? SCORE.legendOp : 100) / 100).toFixed(2);
   }
   function setLoading(on) { var el = $('cx-loading'); if (el) el.classList.toggle('on', on); }
 
@@ -583,8 +582,8 @@
     volume.priceScale().applyOptions({ scaleMargins: on
       ? { top: 1 - SCORE.band - VOL_FRAC, bottom: SCORE.band } : { top: 0.82, bottom: 0 } });
   }
-  function applyLegendOpacity() {
-    var el = $('cx-legend'); if (el) el.style.opacity = (SCORE.legendOp / 100).toFixed(2);
+  function applyLegendOpacity() {   // controls the liquidity-zone legend (bottom)
+    var el = $('cx-label-legend'); if (el) el.style.opacity = (SCORE.legendOp / 100).toFixed(2);
   }
 
   function scheduleScoreFetch() { clearTimeout(scoreFetchT); scoreFetchT = setTimeout(maybeFetchScores, 300); }
@@ -621,11 +620,12 @@
   }
   function applyScore(ev) {
     if (S.tf !== '1m') return;
-    var row = { time: ev.time, p_up: ev.p_up, side: ev.side, fire: ev.fire }, done = false;
-    for (var i = scoreData.length - 1; i >= 0 && i >= scoreData.length - 6; i--) {
-      if (scoreData[i].time === ev.time) { scoreData[i] = row; done = true; break; }
-    }
-    if (!done) scoreData.push(row);
+    var row = { time: ev.time, p_up: ev.p_up, side: ev.side, fire: ev.fire };
+    // replace any existing entry for this bar (avoids a duplicate column/marker —
+    // the bar may already be present from the fetched history/live file); live wins.
+    var i = scoreData.length - 1;
+    for (; i >= 0; i--) if (scoreData[i].time === ev.time) break;
+    if (i >= 0) scoreData[i] = row; else scoreData.push(row);
     updateScoreMarkers(); redrawLevels();
   }
   function lineDash(style) { return style === 'dotted' ? [2, 3] : style === 'dashed' ? [6, 4] : []; }
@@ -916,6 +916,7 @@
               '<span class="cx-ll-nm">' + nm + '</span></div>';
     });
     el.innerHTML = rows || '<div class="cx-ll-nm">No labelled levels</div>';
+    applyLegendOpacity();
   }
   function onLvChange(e) {
     var el = e.target; if (!el.getAttribute) return;
