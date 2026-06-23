@@ -152,6 +152,20 @@ class LiveEngine:
         threading.Thread(target=self._connect_loop, name="live-feed", daemon=True).start()
         threading.Thread(target=self._minute_loop, name="live-minute", daemon=True).start()
         threading.Thread(target=self._flush_loop, name="live-flush", daemon=True).start()
+        threading.Thread(target=self._backfill_scores, name="live-backfill", daemon=True).start()
+
+    def _backfill_scores(self):
+        """Retroactively score bars captured while the program was stopped. Gaps
+        only — live signals are never rewritten. Runs in the background so it never
+        blocks the feed; only does heavy work when there is an actual gap."""
+        if not config.BACKFILL_ON_START:
+            return
+        try:
+            added = signals.backfill(self.symbols)
+            if sum(added.values()):
+                log.info("live: backfilled missing scores %s", added)
+        except Exception:
+            log.exception("live: score backfill failed (continuing)")
 
     def stop(self):
         self._stop = True

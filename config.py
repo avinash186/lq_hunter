@@ -34,6 +34,9 @@ UI_PORT = int(os.getenv("UI_PORT", "8000"))
 # and send it via Telegram (instead of just opening localhost). Set AUTO_HUB=0 to
 # keep the old localhost-only behavior.
 AUTO_HUB = os.getenv("AUTO_HUB", "1").strip().lower() not in ("0", "false", "no", "")
+# On launch, retroactively score any bars missing a signal (e.g. captured while the
+# program was stopped). Only gaps are filled; live/static signals are never rewritten.
+BACKFILL_ON_START = os.getenv("BACKFILL_ON_START", "1").strip().lower() not in ("0", "false", "no", "")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
