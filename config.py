@@ -23,6 +23,9 @@ TOPSTEP_RTC_URL = os.getenv("TOPSTEP_RTC_URL", "https://rtc.topstepx.com")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Extra chat IDs (comma-separated, NUMERIC) that receive ONLY the /hub link.
+# Each recipient must have started the bot first; a @handle will not work.
+TELEGRAM_HUB_RECIPIENTS = os.getenv("TELEGRAM_HUB_RECIPIENTS", "")
 
 # ── Web UI ──
 UI_HOST = os.getenv("UI_HOST", "127.0.0.1")

@@ -193,6 +193,10 @@ def _handle(cmd: str, hub: Hub) -> None:
             notify.send(f"❌ Failed to start the hub: {exc}")
             return
         notify.send(f"✅ Hub is live:\n{url}")
+        # fan ONLY the hub link out to any extra recipients (numeric chat IDs)
+        for cid in (c.strip() for c in config.TELEGRAM_HUB_RECIPIENTS.split(",")):
+            if cid:
+                notify.send_to(cid, f"✅ Hub link:\n{url}")
     elif cmd == "/fetch":
         notify.send("⏳ Fetching the latest bars from TopStep …")
         try:
