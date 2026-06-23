@@ -32,7 +32,7 @@ COST_TICKS = 2.0
 # risk (k*ATR). The directional edge (~53%) is real but thin, so trades where the
 # fixed tick cost is a big share of R (low-vol / low-price periods) are net losers.
 # This is a rational execution filter, not a fitted parameter (robust across k).
-COST_MAX_R = 0.025
+COST_MAX_R = 0.03   # battery: 0.03 gives +24% trades at higher Sharpe vs 0.025
 
 # Directional signal is weak (~50/50), so use LOW-CAPACITY params to avoid the
 # memorization seen at default settings (27% in/out-of-sample gap). Capped depth,
