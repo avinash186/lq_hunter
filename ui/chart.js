@@ -21,7 +21,7 @@
     try {
       fetch('/api/settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cx: S, cxlevels: LV }),
+        body: JSON.stringify({ cx: S, cxlevels: LV, cxscore: SCORE }),
       }).catch(function () {});
     } catch (e) {}
   }
@@ -37,6 +37,14 @@
       if (typeof c.midOn === 'boolean') LV.midOn = c.midOn;
       if (typeof c._v === 'number') LV._v = c._v;
       if (c.types) LVDEF.forEach(function (t) { if (c.types[t.key]) LV.types[t.key] = Object.assign(LV.types[t.key], c.types[t.key]); });
+    }
+    var sc = srv.cxscore;
+    if (sc) {
+      if (typeof sc.on === 'boolean') SCORE.on = sc.on;
+      if (sc.band) SCORE.band = sc.band;
+      if (sc.legendOp != null) SCORE.legendOp = sc.legendOp;
+      if (sc.view && typeof sc.view.lo === 'number') { scoreView.lo = sc.view.lo; scoreView.hi = sc.view.hi; }
+      if (sc.lines) ['mid', 'up', 'down'].forEach(function (k) { if (sc.lines[k]) Object.assign(SCORE.lines[k], sc.lines[k]); });
     }
   }
 
@@ -299,6 +307,7 @@
       '<span style="color:' + col + '">O <b>' + f(b.open) + '</b>  H <b>' + f(b.high) +
       '</b>  L <b>' + f(b.low) + '</b>  C <b>' + f(b.close) + '</b></span>' +
       '<span class="cx-leg-tf">Vol <b>' + f(b.volume) + '</b></span>' + sig;
+    el.style.opacity = ((SCORE.legendOp != null ? SCORE.legendOp : 100) / 100).toFixed(2);
   }
   function setLoading(on) { var el = $('cx-loading'); if (el) el.classList.toggle('on', on); }
 
@@ -540,21 +549,25 @@
   // a bottom band of the synced overlay. 1-minute timeframe only (model cadence).
   var VOL_FRAC = 0.11;                         // volume share of the plot height
   var SCORE = (function () {
-    var d = { on: true, band: 0.26, legendOp: 100,
-      lines: { mid:  { on: true, v: 0.5,  color: '#8892a4', width: 1, style: 'dashed' },
-               up:   { on: true, v: 0.65, color: '#26a69a', width: 1, style: 'dotted' },
-               down: { on: true, v: 0.35, color: '#ef5350', width: 1, style: 'dotted' } } };
+    var d = { on: true, band: 0.26, legendOp: 100, view: { lo: 0, hi: 1 },
+      lines: { mid:  { on: true, color: '#8892a4', width: 1, style: 'dashed' },
+               up:   { on: true, color: '#26a69a', width: 1, style: 'dotted' },
+               down: { on: true, color: '#ef5350', width: 1, style: 'dotted' } } };
     var s = JSON.parse(localStorage.getItem('cxscore') || 'null');
     if (s) {
       d.on = s.on !== false;
       if (s.band) d.band = s.band;
       if (s.legendOp != null) d.legendOp = s.legendOp;
+      if (s.view && typeof s.view.lo === 'number') d.view = s.view;
       ['mid', 'up', 'down'].forEach(function (k) { if (s.lines && s.lines[k]) Object.assign(d.lines[k], s.lines[k]); });
     }
     return d;
   })();
-  function saveScore() { localStorage.setItem('cxscore', JSON.stringify(SCORE)); }
-  var scoreView = { lo: 0, hi: 1 };           // y-zoom of the score pane (not persisted)
+  function saveScore() { localStorage.setItem('cxscore', JSON.stringify(SCORE)); scheduleServerSave(); }
+  var scoreView = SCORE.view;                 // y-zoom of the score pane (persisted)
+  // up/down line VALUES come from the model's own gate (server), not editable;
+  // mid is fixed at 0.5. Only line on/off + color/width/style are user settings.
+  var scoreGate = { long: 0.65, short: 0.35 };
   var formingTime = null;                     // ts of the in-progress bar (no signal yet)
   var firedTimes = {};                        // {sym: [ts,...]} for the prev/next signal arrows
   var scoreData = [], scoreCache = { key: null, from: 0, to: 0 }, scoreReq = 0, scoreFetchT = 0;
@@ -589,6 +602,7 @@
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       if (my !== scoreReq) return;
       scoreData = d.scores || [];
+      if (d.gate) scoreGate = d.gate;
       scoreCache = { key: S.sym, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
       updateScoreMarkers(); redrawLevels();
     }).catch(function () {});
@@ -640,10 +654,12 @@
     ctx.fillStyle = bg; ctx.fillRect(0, y0, rightX, band);
     ctx.setLineDash([]); ctx.lineWidth = 1; ctx.strokeStyle = hexToRgba('#8892a4', 0.4);
     ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(rightX, y0); ctx.stroke();   // top separator
-    // configurable reference lines (mid / up / down)
+    // reference lines: mid fixed 0.5; up/down = the model's own gate (not editable)
     ['mid', 'up', 'down'].forEach(function (k) {
-      var ln = SCORE.lines[k]; if (!ln.on || ln.v < lo || ln.v > hi) return;
-      var yy = yFor(ln.v);
+      var ln = SCORE.lines[k];
+      var val = k === 'mid' ? 0.5 : k === 'up' ? scoreGate.long : scoreGate.short;
+      if (!ln.on || val < lo || val > hi) return;
+      var yy = yFor(val);
       ctx.strokeStyle = ln.color; ctx.lineWidth = ln.width || 1; ctx.setLineDash(lineDash(ln.style));
       ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(rightX, yy); ctx.stroke();
     });
@@ -692,8 +708,8 @@
       scoreView.lo = Math.max(0, c - half); scoreView.hi = Math.min(1, c + half);
       redrawLevels();
     });
-    window.addEventListener('mouseup', function () { dragging = false; });
-    ax.addEventListener('dblclick', function () { scoreView = { lo: 0, hi: 1 }; redrawLevels(); });
+    window.addEventListener('mouseup', function () { if (dragging) { dragging = false; saveScore(); } });
+    ax.addEventListener('dblclick', function () { scoreView.lo = 0; scoreView.hi = 1; saveScore(); redrawLevels(); });
   }
   // prev/next: scroll to the nearest fired signal within the loaded bars
   function loadFired(sym) {
@@ -730,10 +746,9 @@
     }
     ['mid', 'up', 'down'].forEach(function (k) {
       var ln = SCORE.lines[k];
-      var on = $('cx-sl-' + k + '-on'), v = $('cx-sl-' + k + '-v'), col = $('cx-sl-' + k + '-color'),
+      var on = $('cx-sl-' + k + '-on'), col = $('cx-sl-' + k + '-color'),
           w = $('cx-sl-' + k + '-w'), st = $('cx-sl-' + k + '-style');
       if (on) { on.checked = ln.on; on.onchange = function () { ln.on = this.checked; saveScore(); redrawLevels(); }; }
-      if (v) { v.value = ln.v; v.oninput = function () { ln.v = Math.max(0, Math.min(1, +this.value || 0)); saveScore(); redrawLevels(); }; }
       if (col) { col.value = ln.color; col.oninput = function () { ln.color = this.value; saveScore(); redrawLevels(); }; }
       if (w) { w.value = ln.width; w.oninput = function () { ln.width = Math.max(1, +this.value || 1); saveScore(); redrawLevels(); }; }
       if (st) { st.value = ln.style; st.onchange = function () { ln.style = this.value; saveScore(); redrawLevels(); }; }

@@ -254,7 +254,26 @@ def scores(symbol: str, frm: int | None = Query(None, alias="from"),
     df = signals.load(symbol, frm, to)
     out = [{"time": int(r.ts), "p_up": float(r.p_up), "side": int(r.side), "fire": bool(r.fire)}
            for r in df.itertuples()]
-    return JSONResponse({"symbol": symbol, "scores": out})
+    return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol)})
+
+
+_GATE: dict = {}
+
+
+def _gate_thr(symbol: str) -> dict:
+    """The model's effective firing envelope in p_up terms: the (robust) lowest
+    p_up among fired LONGs and highest among fired SHORTs — fixed, model-derived
+    threshold lines for the UI (not user-editable)."""
+    if symbol in _GATE:
+        return _GATE[symbol]
+    df = signals.load(symbol)
+    f = df[df["fire"]] if len(df) else df
+    longs = f[f["side"] == 1]["p_up"] if len(f) else []
+    shorts = f[f["side"] == 0]["p_up"] if len(f) else []
+    g = {"long": float(longs.quantile(0.02)) if len(longs) else 0.5,
+         "short": float(shorts.quantile(0.98)) if len(shorts) else 0.5}
+    _GATE[symbol] = g
+    return g
 
 
 # ───────────────────────── live engine + WebSocket ─────────────────────────
