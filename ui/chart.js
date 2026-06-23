@@ -150,6 +150,7 @@
     volume = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
     chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     applyTheme();
+    applyScoreLayout();
 
     chart.timeScale().subscribeVisibleLogicalRangeChange(function (r) {
       if (r && !loading && hasMore && r.from < 12) loadOlder();
@@ -168,7 +169,7 @@
                      volume: v ? v.value : null };
       }
       if (!b) b = bars[bars.length - 1];
-      if (b) renderLegend(b);
+      if (b) renderLegend(b, param && param.time);
     });
 
     setupOverlayCanvas();
@@ -241,6 +242,8 @@
       else chart.timeScale().scrollToRealTime();
       if (bars.length) renderLegend(bars[bars.length - 1]);
       scheduleLvFetch();
+      applyScoreLayout();
+      scheduleScoreFetch();
       updateMidpoint();
       setLoading(false);
     }).catch(function () { if (my === reqId) setLoading(false); });
@@ -276,15 +279,25 @@
   }
   function applyVolVisible() { volume.applyOptions({ visible: S.volOn }); }
 
-  function renderLegend(b) {
+  function renderLegend(b, t) {
     var el = $('cx-legend'); if (!el) return;
     var col = b.close >= b.open ? S.up : S.down;
     var f = function (v) { return (+v).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+    var sig = '';
+    if (SCORE.on && S.tf === '1m' && scoreData.length) {
+      var tt = (t != null) ? t : b.time, sg = null;
+      for (var i = scoreData.length - 1; i >= 0; i--) { if (scoreData[i].time <= tt) { sg = scoreData[i]; break; } }
+      if (sg && Math.abs(sg.time - tt) <= 60) {
+        var sc = sg.side === 1 ? S.up : S.down;
+        sig = '<span class="cx-leg-tf">p(up) <b style="color:' + sc + '">' + sg.p_up.toFixed(3) + '</b>' +
+              (sg.fire ? (sg.side === 1 ? ' ▲ LONG' : ' ▼ SHORT') : '') + '</span>';
+      }
+    }
     el.innerHTML =
       '<span class="cx-leg-sym">' + S.sym + '</span><span class="cx-leg-tf">' + S.tf + '</span>' +
       '<span style="color:' + col + '">O <b>' + f(b.open) + '</b>  H <b>' + f(b.high) +
       '</b>  L <b>' + f(b.low) + '</b>  C <b>' + f(b.close) + '</b></span>' +
-      '<span class="cx-leg-tf">Vol <b>' + f(b.volume) + '</b></span>';
+      '<span class="cx-leg-tf">Vol <b>' + f(b.volume) + '</b></span>' + sig;
   }
   function setLoading(on) { var el = $('cx-loading'); if (el) el.classList.toggle('on', on); }
 
@@ -525,9 +538,21 @@
   // a bottom band of the synced overlay. 1-minute timeframe only (model cadence).
   var SCORE = (function () {
     var s = JSON.parse(localStorage.getItem('cxscore') || 'null') || {};
-    return { on: s.on !== false, h: s.h || 74 };
+    return { on: s.on !== false };
   })();
+  var BAND_FRAC = 0.24, VOL_FRAC = 0.11;   // score pane / volume share of the plot height
   var scoreData = [], scoreCache = { key: null, from: 0, to: 0 }, scoreReq = 0, scoreFetchT = 0;
+
+  // Reserve a dedicated bottom band for the score pane: push price + volume up so
+  // nothing overlaps. Restore normal layout when the pane is off / not on 1m.
+  function applyScoreLayout() {
+    if (!chart || !candle || !volume) return;
+    var on = SCORE.on && S.tf === '1m';
+    candle.priceScale().applyOptions({ scaleMargins: on
+      ? { top: 0.05, bottom: BAND_FRAC + VOL_FRAC } : { top: 0.08, bottom: 0.02 } });
+    volume.priceScale().applyOptions({ scaleMargins: on
+      ? { top: 1 - BAND_FRAC - VOL_FRAC, bottom: BAND_FRAC } : { top: 0.82, bottom: 0 } });
+  }
 
   function scheduleScoreFetch() { clearTimeout(scoreFetchT); scoreFetchT = setTimeout(maybeFetchScores, 300); }
   function maybeFetchScores() {
@@ -571,20 +596,37 @@
   }
   function redrawScore(ctx, c, rightX) {
     if (!SCORE.on || S.tf !== '1m' || !scoreData.length) return;
-    var H = c.clientHeight, band = SCORE.h, y0 = H - band, mid = y0 + band / 2, half = band / 2 - 4;
-    ctx.fillStyle = hexToRgba(S.theme === 'light' ? '#1b2433' : '#aebbd0', 0.06);
+    var axisH = chart.timeScale().height() || 28;
+    var plotH = c.clientHeight - axisH;          // exclude the time-axis strip
+    var band = plotH * BAND_FRAC;
+    var y1 = plotH, y0 = plotH - band, mid = (y0 + y1) / 2;
+    var yFor = function (p) { return y1 - p * band; };     // p in [0,1] -> y
+    // pane background + top separator
+    ctx.fillStyle = hexToRgba(S.theme === 'light' ? '#1b2433' : '#aebbd0', 0.05);
     ctx.fillRect(0, y0, rightX, band);
-    ctx.strokeStyle = hexToRgba('#8892a4', 0.6); ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
-    ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(rightX, mid); ctx.stroke(); ctx.setLineDash([]);
+    ctx.setLineDash([]); ctx.lineWidth = 1;
+    ctx.strokeStyle = hexToRgba('#8892a4', 0.35);
+    ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(rightX, y0); ctx.stroke();
+    // y gridlines (0 / 0.5 / 1), 0.5 brighter
+    ctx.setLineDash([2, 3]);
+    [0.0, 0.5, 1.0].forEach(function (p) {
+      ctx.strokeStyle = hexToRgba('#8892a4', p === 0.5 ? 0.5 : 0.2);
+      var yy = yFor(p); ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(rightX, yy); ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    // p(up) columns from the 0.5 line (fired = solid, else faint)
     for (var i = 0; i < scoreData.length; i++) {
       var s = scoreData[i], x = timeToX(s.time);
       if (x == null || x < 0 || x > rightX) continue;
-      var dev = s.p_up - 0.5, h = Math.max(1, Math.abs(dev) * 2 * half), up = dev >= 0;
-      ctx.fillStyle = s.fire ? (s.side === 1 ? S.up : S.down)
-                             : hexToRgba(up ? S.up : S.down, 0.30);
-      ctx.fillRect(x - 0.6, up ? mid - h : mid, 1.4, h);
+      var yv = yFor(s.p_up), up = s.p_up >= 0.5;
+      ctx.fillStyle = s.fire ? (s.side === 1 ? S.up : S.down) : hexToRgba(up ? S.up : S.down, 0.3);
+      ctx.fillRect(x - 0.6, Math.min(mid, yv), 1.4, Math.max(1, Math.abs(yv - mid)));
     }
-    ctx.fillStyle = hexToRgba('#8892a4', 0.85); ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+    // y-axis labels (in the right gutter) + pane title
+    ctx.fillStyle = hexToRgba('#8892a4', 0.9); ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText('1.0', rightX + 4, yFor(1.0) + 8);
+    ctx.fillText('0.5', rightX + 4, yFor(0.5) + 3);
+    ctx.fillText('0.0', rightX + 4, yFor(0.0) - 2);
     ctx.fillText('p(up)', 4, y0 + 11);
   }
   function wireScore() {
@@ -594,6 +636,7 @@
       SCORE.on = !SCORE.on;
       localStorage.setItem('cxscore', JSON.stringify({ on: SCORE.on, h: SCORE.h }));
       b.classList.toggle('active', SCORE.on);
+      applyScoreLayout();
       if (SCORE.on) maybeFetchScores();
       else { if (candle) candle.setMarkers([]); scoreData = []; scoreCache = { key: null, from: 0, to: 0 }; redrawLevels(); }
     };
