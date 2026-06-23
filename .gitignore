@@ -25,3 +25,4 @@ data/bars/*.parquet.backadj
 .idea/
 *.iml
 data/ui_settings.json
+data/signals/
