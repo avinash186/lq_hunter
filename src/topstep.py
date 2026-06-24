@@ -196,6 +196,12 @@ def close_position(account_id, contract_id: str) -> dict:
     return _post("/api/Position/closeContract", {"accountId": int(account_id), "contractId": contract_id})
 
 
+def search_accounts(only_active: bool = True) -> list[dict]:
+    """Active trading accounts for the API user (id / name / balance / canTrade)."""
+    j = _post("/api/Account/search", {"onlyActiveAccounts": bool(only_active)})
+    return j.get("accounts", []) or []
+
+
 def candidate_contracts(symbol: str, start: datetime) -> list[str]:
     """Quarterly contract ids spanning the quarter that covers ``start`` through
     the current front month, inclusive — e.g. ['…ENQ.M26', '…ENQ.U26'].

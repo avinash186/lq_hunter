@@ -66,12 +66,14 @@ def append(symbol, rec, variant="lq"):
     out.sort_values("entry_ts").to_parquet(p, index=False)
 
 
-def bracket_and_size(symbol, entry, atr, above, below, side, variant="lq"):
+def bracket_and_size(symbol, entry, atr, above, below, side, variant="lq", max_risk=None):
     """TP/SL prices + dynamic micro sizing for one fire (pure; live + backtest share it).
-    contracts = floor(MAX_RISK/(sl_pts·pv)) >= 1; sl capped at MAX_RISK/pv pts so 1 fits."""
+    contracts = floor(MAX_RISK/(sl_pts·pv)) >= 1; sl capped at MAX_RISK/pv pts so 1 fits.
+    ``max_risk`` overrides the dollar cap (live passes the runtime setting); None = config."""
     sgn = 1.0 if side == 1 else -1.0
     pv = config.EXEC_POINT_VALUE.get(symbol.upper(), 2.0)
-    max_sl_pts = config.MAX_RISK_PER_TRADE / pv
+    mr = config.MAX_RISK_PER_TRADE if max_risk is None else float(max_risk)
+    max_sl_pts = mr / pv
     floor = ATR_FLOOR * atr
     if variant == "atr":
         d = min(ATR_K * atr, max_sl_pts)
@@ -84,7 +86,7 @@ def bracket_and_size(symbol, entry, atr, above, below, side, variant="lq"):
         sl_pts = (min(max(abs(agn_lvl - entry), floor), max_sl_pts)
                   if np.isfinite(agn_lvl) else min(1.5 * atr, max_sl_pts))
     sl_pts = max(sl_pts, 1e-9)
-    contracts = max(1, int(math.floor(config.MAX_RISK_PER_TRADE / (sl_pts * pv))))
+    contracts = max(1, int(math.floor(mr / (sl_pts * pv))))
     return {"entry": float(entry), "tp": float(entry + sgn * tp_pts),
             "sl": float(entry - sgn * sl_pts), "tp_pts": float(tp_pts),
             "sl_pts": float(sl_pts), "contracts": contracts,

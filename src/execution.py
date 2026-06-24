@@ -11,7 +11,7 @@ Design goals (see docs/topstep_impl_plan.md):
   * TP/SL fidelity under slippage: brackets are sent as TICK OFFSETS (= our sl_pts/tp_pts),
     so the risk distance + sizing are preserved no matter where the market fills.
 
-SAFE BY DEFAULT: with config.EXECUTE_BROKER off, submit() is a DRY RUN — it logs/alerts
+SAFE BY DEFAULT: with settings.execute_broker() off, submit() is a DRY RUN — it logs/alerts
 the exact payload and sends NO order.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ import logging
 import threading
 
 import config
-from src import topstep, notify
+from src import topstep, notify, settings
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ _halted = False
 
 
 def _acct():
-    return config.TOPSTEP_ACCOUNT_ID
+    return settings.account_id()
 
 
 def custom_tag(symbol: str, entry_ts: int) -> str:
@@ -120,7 +120,7 @@ def submit(symbol: str, signal: dict) -> dict:
         contracts = int(signal["contracts"])
 
         # DRY RUN — no order is sent.
-        if not config.EXECUTE_BROKER:
+        if not settings.execute_broker():
             cid = _contracts.get(symbol, config.EXEC_CONTRACT_ROOT.get(symbol, "?") + "FRONT")
             payload = topstep.build_order_payload(_acct(), cid, signal["side"], contracts,
                                                   sl_ticks, tp_ticks, tag)
@@ -186,7 +186,7 @@ def on_position_update(positions: list[dict]) -> None:
 def reconcile_startup() -> None:
     """On boot, adopt any existing broker positions into state so a restart never
     double-submits or loses track of a live trade."""
-    if not config.EXECUTE_BROKER:
+    if not settings.execute_broker():
         return
     try:
         positions = topstep.search_open_positions(_acct())
@@ -244,7 +244,7 @@ _hub = None
 def start_user_hub():
     """Persistent SignalR connection to the ProjectX USER hub for order/position/
     trade events. Mirrors live.py's market-hub pattern. No-op if execution is off."""
-    if not config.EXECUTE_BROKER:
+    if not settings.execute_broker():
         return
     global _hub
     try:

@@ -35,11 +35,22 @@ Open positions/orders are read from the broker (`/api/Position/searchOpen`,
 `GatewayUserPosition/Order/Trade`. On startup, existing positions are **adopted** so a
 restart never double-submits.
 
-## /kill failsafe (Telegram, owner chat only)
-- **/kill** or **/flat** → cancel all orders + close all positions (bounded retries) and
-  **HALT** new entries.
+## Telegram control (owner chat only)
+- **/kill** or **/flat** → cancel all orders + close all positions (bounded retries) and **HALT** new entries.
 - **/resume** → re-enable entries.
-- **/status** → broker open-position count + halt state.
+- **/status** → mode, account, model, max risk, halt, broker open-position count.
+- **/list** → active Topstep accounts (id / name / balance), the connected one marked.
+- **/opt** → inline-keyboard editor: **Max risk** (presets + custom), **Mode (Dry⇄Live)**,
+  **Model** (where a registry exists; blocked in a position), **Account** (blocked in a position).
+- **/help** → command list.
+
+## Runtime settings persistence (`src/settings.py` → `data/runtime_settings.json`)
+Mutable settings (`max_risk_per_trade`, `execute_broker`, `account_id`) live in a JSON store,
+**seeded DRY on first creation**, then **stored values win and survive restarts** — if you went
+LIVE, the bot comes back LIVE (and reconciles/adopts open positions on boot). `.env`'s
+`EXECUTE_BROKER`/`MAX_RISK_PER_TRADE`/`TOPSTEP_ACCOUNT_ID` are one-time seeds; edit via `/opt`
+after that. Changes apply on the **next signal — no restart**. The backtest path still uses the
+`config` default (deterministic). On start + each session open, a **status card** is sent.
 
 ## Tests
 `PYTHONPATH=. python tests/test_execution.py` — 14 mocked tests (payload/ticks/side,
