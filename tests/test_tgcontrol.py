@@ -38,14 +38,53 @@ def test_summary_shows_mode_and_traded_symbol():
     assert "DRY" in s and "Trading: MNQ" in s and "$150" in s and "12345" in s
 
 
-def test_list_marks_connected():
+def test_list_marks_connected_and_copyable():
     _reset()
     topstep.search_accounts = lambda only_active=True: [
         {"id": 12345, "name": "Express", "balance": 50000},
         {"id": 67890, "name": "Combine", "balance": 150000}]
-    out = tgcontrol.cmd_list()
-    assert "12345" in out and "← connected" in out
-    assert out.count("← connected") == 1                  # only the wired account
+    out = tgcontrol.cmd_list()                             # no chat_id -> returns text
+    assert "<code>12345</code>" in out                     # tap-to-copy id (HTML)
+    assert "Connected account" in out and out.count("← connected") == 1
+
+
+def test_list_sends_html_with_chat():
+    _reset()
+    sent = {}
+    notify.send_to = lambda cid, text, **k: sent.update(text=text, parse=k.get("parse_mode")) or True
+    topstep.search_accounts = lambda only_active=True: [{"id": 12345, "name": "Express", "balance": 50000}]
+    assert tgcontrol.cmd_list("12345") is None             # sent directly with HTML
+    assert sent["parse"] == "HTML" and "<code>12345</code>" in sent["text"]
+
+
+def test_stop_switches_to_dry():
+    _reset()
+    settings._data["execute_broker"] = True
+    out = tgcontrol.cmd_stop()
+    assert settings.execute_broker() is False and "DRY" in out
+
+
+def test_stop_blocked_with_open_position():
+    _reset()
+    settings._data["execute_broker"] = True
+    execution._state["NQ"] = {"status": execution.OPEN, "contract_id": "C"}
+    out = tgcontrol.cmd_stop()
+    assert settings.execute_broker() is True and "open" in out.lower()   # not switched
+
+
+def test_stop_when_already_dry():
+    _reset()
+    assert "Already DRY" in tgcontrol.cmd_stop()
+
+
+def test_settings_change_is_live_no_reload():
+    """A Telegram change is read by the consumer immediately (same process, in-memory)."""
+    _reset()
+    assert settings.execute_broker() is False
+    tgcontrol._route("set:mode:1", "12345")               # user taps Live
+    assert settings.execute_broker() is True               # consumer sees it now, no reload
+    tgcontrol._route("set:risk:200", "12345")
+    assert settings.max_risk() == 200                      # next signal sizes with $200
 
 
 def test_callback_sets_risk():
@@ -95,8 +134,8 @@ def test_every_menu_command_is_wired():
     from src import live
     menu = {c[0] for c in tgcontrol.COMMAND_MENU}
     handlers = {}
-    handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help")})
-    handlers.update({c: getattr(bot, "cmd_" + c) for c in ("hub", "fetch", "stop")})
+    handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help", "stop")})
+    handlers.update({c: getattr(bot, "cmd_" + c) for c in ("hub", "fetch")})
     handlers.update({"kill": live.LiveEngine._cmd_kill, "flat": live.LiveEngine._cmd_kill,
                      "resume": live.LiveEngine._cmd_resume})
     missing = menu - set(handlers)
