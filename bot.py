@@ -1,15 +1,14 @@
-"""Two-way Telegram control bot (long-polling, no extra deps).
+"""Launch helper + public-tunnel handlers.
 
-    python bot.py        # keep this running; then message the bot
+This module no longer polls Telegram. The web-server process owns the SINGLE Telegram
+command poller (src/notify.poll_commands, wired in src/live.py), which dispatches the
+/hub, /fetch and /stop commands to the handlers here. Two pollers on one token caused
+409 conflicts and stray replies — now there is exactly one.
 
-Commands (accepted only from the configured TELEGRAM_CHAT_ID):
-    /hub      start the web UI + a public cloudflared link, reply with the URL
-    /status   report whether the hub is currently up
-    /stop     tear down the tunnel (and the UI server /hub started)
-    /help     list commands
+The hub uses a cloudflared *quick tunnel* (https://<random>.trycloudflare.com) which
+needs no Cloudflare account or login.
 
-The hub uses a cloudflared *quick tunnel* (https://<random>.trycloudflare.com)
-which needs no Cloudflare account or login.
+Start everything with:  python run.py
 """
 from __future__ import annotations
 
@@ -24,8 +23,6 @@ import zoneinfo as _zoneinfo
 from queue import Empty, Queue
 from threading import Thread
 
-import requests
-
 import config
 from src import fetcher, notify
 
@@ -36,38 +33,7 @@ logging.Formatter.converter = staticmethod(
 
 log = logging.getLogger("bot")
 
-TG = "https://api.telegram.org/bot{token}/{method}"
 TUNNEL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
-
-# Commands shown in Telegram's "/" dropdown (registered via setMyCommands).
-BOT_COMMANDS = [
-    {"command": "hub", "description": "Launch the UI and get a public link"},
-    {"command": "fetch", "description": "Pull the latest NQ & ES bars from TopStep"},
-    {"command": "status", "description": "Is the hub up?"},
-    {"command": "stop", "description": "Tear the hub down"},
-    {"command": "help", "description": "List commands"},
-]
-
-
-def _register_commands():
-    """Tell Telegram our command list so typing '/' shows a menu that
-    narrows as you type (same mechanism BotFather uses)."""
-    try:
-        requests.post(TG.format(token=config.TELEGRAM_BOT_TOKEN, method="setMyCommands"),
-                      json={"commands": BOT_COMMANDS}, timeout=10)
-        log.info("registered %d bot commands", len(BOT_COMMANDS))
-    except requests.RequestException:
-        log.warning("could not register bot commands", exc_info=True)
-
-HELP = (
-    "Commands:\n"
-    "/hub – launch the UI and get a public link\n"
-    "/fetch – pull the latest NQ & ES bars from TopStep\n"
-    "/status – is the hub up?\n"
-    "/stop – tear the hub down\n"
-    "/help – this message"
-)
-
 
 def _port_open(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -174,13 +140,9 @@ class Hub:
         self.tunnel = self.server = self.url = None
 
 
-def _api(method: str, **params: object) -> dict:
-    r = requests.get(
-        TG.format(token=config.TELEGRAM_BOT_TOKEN, method=method),
-        params=params,
-        timeout=70,
-    )
-    return r.json()
+# Single shared tunnel instance — both auto_hub (launch) and the /hub command (served by
+# the server's ONE Telegram poller, same process via run.py) drive this same object.
+HUB = Hub()
 
 
 def _announce(url: str) -> None:
@@ -191,9 +153,9 @@ def _announce(url: str) -> None:
             notify.send_to(cid, f"✅ Hub link:\n{url}")
 
 
-def _auto_hub(hub: Hub) -> None:
-    """On launch: wait for the local UI to bind, raise a cloudflared tunnel,
-    announce + fan out the link, and open it in the browser. AUTO_HUB=0 disables."""
+def auto_hub() -> None:
+    """On launch: wait for the local UI to bind, raise a cloudflared tunnel, announce +
+    fan out the link, and open it in the browser. AUTO_HUB=0 disables."""
     import webbrowser
     if not config.AUTO_HUB:
         return
@@ -203,7 +165,7 @@ def _auto_hub(hub: Hub) -> None:
         time.sleep(0.5)
     local = f"http://{config.UI_HOST}:{config.UI_PORT}"
     try:
-        url = hub.restart()
+        url = HUB.restart()
     except Exception as exc:                    # noqa: BLE001 — fall back to localhost
         log.exception("auto-hub failed")
         notify.send(f"⚠️ Auto-hub failed ({exc}). Local UI: {local}")
@@ -219,91 +181,51 @@ def _auto_hub(hub: Hub) -> None:
         log.warning("could not open browser", exc_info=True)
 
 
-def _handle(cmd: str, hub: Hub) -> None:
-    if cmd == "/hub":
-        notify.send("🚀 (Re)starting the hub — killing any existing instance …")
-        try:
-            url = hub.restart()
-        except Exception as exc:  # noqa: BLE001 — report any failure to the user
-            log.exception("hub start failed")
-            notify.send(f"❌ Failed to start the hub: {exc}")
-            return
-        _announce(url)
-    elif cmd == "/fetch":
-        notify.send("⏳ Fetching the latest bars from TopStep …")
-        try:
-            results = fetcher.update_all()
-        except Exception as exc:  # noqa: BLE001 — report any failure to the user
-            log.exception("fetch failed")
-            notify.send(f"❌ Fetch failed: {exc}")
-            return
-        lines = ["📥 Fetch complete:"]
-        for r in results:
-            if "error" in r:
-                lines.append(f"• {r['symbol']}: ❌ {r['error']}")
-            else:
-                lines.append(f"• {r['symbol']}: +{r['added']:,} bars → {r['new_end']}")
-        notify.send("\n".join(lines))
-    elif cmd == "/status":
-        notify.send(f"🟢 Hub up:\n{hub.url}" if hub.is_up()
-                    else "🔴 Hub is not running. Send /hub to start it.")
-    elif cmd == "/stop":
-        hub.stop()
-        notify.send("🛑 Hub stopped.")
-    elif cmd in ("/help", "/start"):
-        notify.send(HELP)
-    else:
-        notify.send(f"Unknown command.\n{HELP}")
+# ── command handlers (called by the server's single Telegram poller as fn(chat_id)) ──
+def cmd_hub(chat_id=None) -> str:
+    notify.send("🚀 (Re)starting the public link …")
+    try:
+        url = HUB.restart()
+    except Exception as exc:                    # noqa: BLE001
+        log.exception("hub start failed")
+        return f"❌ Failed to start the hub: {exc}"
+    _announce(url)
+    return f"✅ Hub is live:\n{url}"
+
+
+def cmd_fetch(chat_id=None) -> str:
+    notify.send("⏳ Fetching the latest bars from TopStep …")
+    try:
+        results = fetcher.update_all()
+    except Exception as exc:                    # noqa: BLE001
+        log.exception("fetch failed")
+        return f"❌ Fetch failed: {exc}"
+    lines = ["📥 Fetch complete:"]
+    for r in results:
+        lines.append(f"• {r['symbol']}: ❌ {r['error']}" if "error" in r
+                     else f"• {r['symbol']}: +{r['added']:,} bars → {r['new_end']}")
+    return "\n".join(lines)
+
+
+def cmd_stop(chat_id=None) -> str:
+    HUB.stop()
+    return "🛑 Public link stopped."
+
+
+def hub_status() -> str:
+    return f"🟢 Hub up: {HUB.url}" if HUB.is_up() else "🔴 Hub link down (send /hub)."
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=config.LOG_LEVEL, datefmt="%Y-%m-%d %H:%M:%S ET",
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    """Launch-time hook (run as a thread by run.py): raise the public tunnel. There is NO
+    Telegram polling loop here — the web-server process owns the SINGLE poller, so we never
+    create a second one (two pollers on one token cause 409 conflicts)."""
     if not notify.configured():
-        raise SystemExit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env first.")
-    _register_commands()
-
-    allowed = str(config.TELEGRAM_CHAT_ID)
-    hub = Hub()
-
-    # On launch, raise the public tunnel + open/announce the link (AUTO_HUB).
-    Thread(target=_auto_hub, args=(hub,), name="auto-hub", daemon=True).start()
-
-    # Skip any backlog so we don't replay old messages on startup.
-    offset: int | None = None
-    for upd in _api("getUpdates", timeout=0).get("result", []):
-        offset = upd["update_id"] + 1
-
-    log.info("bot polling — press Ctrl+C to stop")
-    try:
-        while True:
-            try:
-                resp = _api("getUpdates", offset=offset, timeout=60)
-            except requests.RequestException as exc:
-                log.warning("poll error: %s", exc)
-                time.sleep(3)
-                continue
-
-            for upd in resp.get("result", []):
-                offset = upd["update_id"] + 1
-                msg = upd.get("message") or {}
-                chat_id = str((msg.get("chat") or {}).get("id", ""))
-                text = (msg.get("text") or "").strip()
-                if not text:
-                    continue
-                if chat_id != allowed:
-                    log.warning("ignoring message from unauthorized chat %s", chat_id)
-                    continue
-                cmd = text.split()[0].lower().split("@")[0]  # strip @botname
-                log.info("command: %s", cmd)
-                _handle(cmd, hub)
-    except KeyboardInterrupt:
-        log.info("shutting down …")
-    finally:
-        hub.stop()
+        log.warning("Telegram not configured — auto-hub link will still open locally.")
+    Thread(target=auto_hub, name="auto-hub", daemon=True).start()
 
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=config.LOG_LEVEL, datefmt="%Y-%m-%d %H:%M:%S ET",
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    print("bot.py is now a library. Start everything with:  python run.py")

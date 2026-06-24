@@ -88,6 +88,23 @@ def test_account_switch_when_flat():
     assert str(settings.account_id()) == "67890"
 
 
+def test_every_menu_command_is_wired():
+    """Guard: every command in the / menu resolves to a real handler (no 'unknown
+    command'). Mirrors the handler map built in live.LiveEngine._boot."""
+    import bot
+    from src import live
+    menu = {c[0] for c in tgcontrol.COMMAND_MENU}
+    handlers = {}
+    handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help")})
+    handlers.update({c: getattr(bot, "cmd_" + c) for c in ("hub", "fetch", "stop")})
+    handlers.update({"kill": live.LiveEngine._cmd_kill, "flat": live.LiveEngine._cmd_kill,
+                     "resume": live.LiveEngine._cmd_resume})
+    missing = menu - set(handlers)
+    assert not missing, f"menu commands with NO handler: {missing}"
+    for c, fn in handlers.items():
+        assert callable(fn), c
+
+
 def test_cancel_closes_menu():
     _reset()
     text, rows = tgcontrol._route("opt:close", "12345")
@@ -123,8 +140,9 @@ def test_command_menu_is_valid():
     for cmd, desc in tgcontrol.COMMAND_MENU:
         assert re.match(r"^[a-z0-9_]{1,32}$", cmd), cmd        # Telegram command rules
         assert 1 <= len(desc) <= 256
-    for need in ("opt", "list", "status", "kill", "resume", "help"):
-        assert need in cmds                                    # everything we built is listed
+    for need in ("opt", "list", "status", "kill", "flat", "resume", "help", "hub", "fetch", "stop"):
+        assert need in cmds                                    # one unified menu (control + hub)
+    assert len(cmds) == len(set(cmds))                         # no duplicate command entries
 
 
 def test_set_commands_payload():

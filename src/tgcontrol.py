@@ -14,13 +14,18 @@ log = logging.getLogger(__name__)
 RISK_PRESETS = (100, 130, 150, 200)
 
 # Registered with Telegram (setMyCommands) -> shown in the / dropdown + menu button.
+# ONE unified list (the single poller handles all of these); /hub /fetch /stop are served
+# by bot.py's tunnel handlers, the rest by tgcontrol / the live engine.
 COMMAND_MENU = [
     ("opt", "View & edit settings"),
+    ("status", "Live status + hub link"),
     ("list", "Topstep accounts"),
-    ("status", "Live status"),
+    ("hub", "Restart the public UI link"),
+    ("fetch", "Pull latest NQ & ES bars"),
     ("kill", "Flatten all & halt entries"),
     ("flat", "Flatten all & halt (alias of /kill)"),
     ("resume", "Re-enable entries"),
+    ("stop", "Stop the public UI link"),
     ("help", "Show all commands"),
 ]
 _pending: dict[str, str] = {}            # chat_id -> awaited input key
@@ -127,6 +132,11 @@ def cmd_help(chat_id=None) -> str:
 
 def cmd_status(chat_id=None) -> str:
     s = settings_summary()
+    try:                                 # hub link (same process)
+        import bot
+        s += "\n" + bot.hub_status()
+    except Exception:                    # noqa: BLE001
+        pass
     if settings.execute_broker():
         try:
             n = sum(1 for p in topstep.search_open_positions(settings.account_id()) if (p.get("size") or 0) != 0)
