@@ -12,6 +12,17 @@ from src import settings, topstep, execution, notify
 log = logging.getLogger(__name__)
 
 RISK_PRESETS = (100, 130, 150, 200)
+
+# Registered with Telegram (setMyCommands) -> shown in the / dropdown + menu button.
+COMMAND_MENU = [
+    ("opt", "View & edit settings"),
+    ("list", "Topstep accounts"),
+    ("status", "Live status"),
+    ("kill", "Flatten all & halt entries"),
+    ("flat", "Flatten all & halt (alias of /kill)"),
+    ("resume", "Re-enable entries"),
+    ("help", "Show all commands"),
+]
 _pending: dict[str, str] = {}            # chat_id -> awaited input key
 _BACK = {"text": "‹ Back", "callback_data": "opt:menu"}
 

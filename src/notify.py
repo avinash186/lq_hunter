@@ -114,6 +114,24 @@ def answer_callback(callback_id: str, text: str = "") -> None:
         pass
 
 
+def set_commands(commands) -> bool:
+    """Register the bot's command list with Telegram (populates the / dropdown + the
+    menu button). ``commands`` = list of (command, description) tuples or dicts."""
+    if not config.TELEGRAM_BOT_TOKEN:
+        return False
+    norm = [{"command": c[0], "description": c[1]} if isinstance(c, (tuple, list))
+            else {"command": c["command"], "description": c["description"]} for c in commands]
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/setMyCommands",
+                          json={"commands": norm}, timeout=10)
+        if not r.ok:
+            log.error("telegram setMyCommands failed: %s %s", r.status_code, r.text)
+        return r.ok
+    except requests.RequestException as exc:
+        log.error("telegram setMyCommands error: %s", exc)
+        return False
+
+
 def poll_commands(handlers: dict, *, on_callback=None, on_text=None,
                   stop=None, long_poll: int = 45) -> None:
     """Long-poll getUpdates and dispatch authorized events (owner chat only):

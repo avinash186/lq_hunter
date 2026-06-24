@@ -88,6 +88,30 @@ def test_account_switch_when_flat():
     assert str(settings.account_id()) == "67890"
 
 
+def test_command_menu_is_valid():
+    import re
+    cmds = [c[0] for c in tgcontrol.COMMAND_MENU]
+    for cmd, desc in tgcontrol.COMMAND_MENU:
+        assert re.match(r"^[a-z0-9_]{1,32}$", cmd), cmd        # Telegram command rules
+        assert 1 <= len(desc) <= 256
+    for need in ("opt", "list", "status", "kill", "resume", "help"):
+        assert need in cmds                                    # everything we built is listed
+
+
+def test_set_commands_payload():
+    captured = {}
+    def fake_post(url, json=None, timeout=None):
+        captured["url"] = url; captured["body"] = json
+        class R:
+            ok = True
+        return R()
+    config.TELEGRAM_BOT_TOKEN = "TESTTOKEN"
+    notify.requests.post = fake_post
+    assert notify.set_commands(tgcontrol.COMMAND_MENU) is True
+    assert captured["url"].endswith("/setMyCommands")
+    assert captured["body"]["commands"][0] == {"command": "opt", "description": "View & edit settings"}
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

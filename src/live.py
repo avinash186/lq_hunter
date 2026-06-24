@@ -168,9 +168,10 @@ class LiveEngine:
                                      "on_text": tgcontrol.on_text, "stop": self._cmd_stop},
                              name="tg-commands", daemon=True).start()
             try:
+                notify.set_commands(tgcontrol.COMMAND_MENU)   # populate the / menu
                 notify.send("🤖 Bot live\n\n" + tgcontrol.settings_summary())
             except Exception:
-                log.exception("live: startup card failed")
+                log.exception("live: startup card / command menu failed")
         threading.Thread(target=self._connect_loop, name="live-feed", daemon=True).start()
         threading.Thread(target=self._minute_loop, name="live-minute", daemon=True).start()
         threading.Thread(target=self._flush_loop, name="live-flush", daemon=True).start()
