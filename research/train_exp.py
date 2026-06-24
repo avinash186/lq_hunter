@@ -122,6 +122,7 @@ def run(max_days=None):
     cols = _cols("full")
     legs = {"A_prod_1.5/1.5": {"r": [], "ts": []}, "B_LQ_oldgate": {"r": [], "ts": []},
             "C_LQ_retrain": {"r": [], "ts": []}}
+    oos_fires = []                                         # leg-B OOS fires -> trades engine
 
     for i in range(N_FOLDS):
         te0, te1 = bounds[i], bounds[i + 1]
@@ -158,6 +159,9 @@ def run(max_days=None):
         # meta gate trained on LQ wins (Phase 4)
         takeLQ, mmLQ, bqLQ = _meta(rtr, te, cols, P_tr, P_te, lqtr, None)
         g15 = take15 & cost_ok; gLQ = takeLQ & cost_ok
+        if g15.any():                                      # production-gate OOS fires (test set)
+            oos_fires.append(pd.DataFrame({"ts": te["ts"].to_numpy()[g15],
+                                           "side": side_te[g15].astype("int8"), "sid": sym_te[g15]}))
         for leg, take, r, bars in (("A_prod_1.5/1.5", g15, r15_te, b15),
                                    ("B_LQ_oldgate", g15, lqte, blq),
                                    ("C_LQ_retrain", gLQ, lqte, blq)):
@@ -166,6 +170,15 @@ def run(max_days=None):
         print(f"fold {i}: prodCov {g15.mean():.2f} LQCov {gLQ.mean():.2f}", flush=True)
 
     OUT.mkdir(exist_ok=True)
+    if oos_fires:                                          # write OOS fires for the trades engine
+        from src import signals as _sig
+        TR = config.DATA_DIR / "trades"; TR.mkdir(exist_ok=True)
+        allf = pd.concat(oos_fires, ignore_index=True)
+        allf["ts"] = _sig._to_etnaive(allf["ts"])         # UTC -> ET-naive (match the bars)
+        for name, sid in dataset._SYMBOL_ID.items():
+            sub = allf[allf["sid"] == sid][["ts", "side"]].sort_values("ts").reset_index(drop=True)
+            sub.to_parquet(TR / f"oos_fires_{name.lower()}.parquet", index=False)
+            print(f"OOS fires {name}: {len(sub):,} -> oos_fires_{name.lower()}.parquet")
     print("\n" + "=" * 78)
     print("PHASE-4 three-way OOS comparison (non-overlap, net of cost)")
     print("=" * 78)

@@ -740,9 +740,9 @@
   // ─────────────── equity curve (separate chart below) ───────────────
   var eqChart = null, eqSeries = null, eqTrades = [];
   var EQ = (function () {
-    var d = { unit: 'usd', start: null, snap: false };
+    var d = { unit: 'usd', start: null, snap: false, oos: false };
     var s = JSON.parse(localStorage.getItem('cxeq') || 'null');
-    if (s) { if (s.unit) d.unit = s.unit; if (s.start != null) d.start = s.start; d.snap = !!s.snap; }
+    if (s) { if (s.unit) d.unit = s.unit; if (s.start != null) d.start = s.start; d.snap = !!s.snap; d.oos = !!s.oos; }
     return d;
   })();
   function saveEq() { localStorage.setItem('cxeq', JSON.stringify(EQ)); }
@@ -769,6 +769,11 @@
       snap.onclick = function () { EQ.snap = !EQ.snap; saveEq(); snap.classList.toggle('active', EQ.snap);
         if (EQ.snap) applyEqSnap(); else if (eqChart) eqChart.timeScale().fitContent(); };
     }
+    var oos = $('cx-eq-oos');
+    if (oos) {
+      oos.classList.toggle('active', EQ.oos);
+      oos.onclick = function () { EQ.oos = !EQ.oos; saveEq(); oos.classList.toggle('active', EQ.oos); loadEquity(); };
+    }
   }
   function initEquity() {
     var el = $('cx-equity-chart'); if (!el || !window.LightweightCharts || eqChart) return;
@@ -792,7 +797,8 @@
   }
   function loadEquity() {
     if (!eqSeries) return;
-    var u = new URL('/api/trades/' + S.sym, location.origin); u.searchParams.set('variant', TRADES.variant);
+    var u = new URL('/api/trades/' + S.sym, location.origin);
+    u.searchParams.set('variant', TRADES.variant); u.searchParams.set('oos', EQ.oos ? '1' : '0');
     fetch(u).then(function (r) { return r.json(); }).then(function (d) { eqTrades = d.trades || []; renderEquity(); }).catch(function () {});
   }
   function renderEquity() {

@@ -41,8 +41,12 @@ _COLS = {"entry_ts": "int64", "exit_ts": "int64", "side": "int8", "entry": "floa
          "risk_usd": "float64", "R": "float64", "pnl_usd": "float64", "outcome": "object"}
 
 
-def path(symbol, variant="lq"):
-    return TR_DIR / f"trades_{symbol.lower()}_{variant}.parquet"
+def path(symbol, variant="lq", oos=False):
+    return TR_DIR / f"trades_{symbol.lower()}_{variant}{'_oos' if oos else ''}.parquet"
+
+
+def oos_fires_path(symbol):              # walk-forward OOS fires (written by research/train_exp.py)
+    return TR_DIR / f"oos_fires_{symbol.lower()}.parquet"
 
 
 def path_live(symbol, variant="lq"):     # live trades closed this session (append-only)
@@ -115,7 +119,7 @@ def _session(idx):
     return etmin, ge & ~prev_ge_same
 
 
-def build(symbol, variant="lq"):
+def build(symbol, variant="lq", fires=None):
     df = data_loader.live_frame(symbol)
     atr = technical.build(df)["atr_fast"].to_numpy()
     bk = brackets.build(df, tick=config.TICK_SIZE.get(symbol, 0.25))
@@ -126,9 +130,10 @@ def build(symbol, variant="lq"):
     pos = {int(t): i for i, t in enumerate(ep)}
     n = len(df); tick = config.TICK_SIZE.get(symbol, 0.25)
 
-    sig = signals.load(symbol); sig = sig[sig["fire"]].sort_values("ts")
+    if fires is None:
+        sig = signals.load(symbol); fires = sig[sig["fire"]].sort_values("ts")
     rows, busy = [], -1
-    for ts, side in zip(sig["ts"].to_numpy(), sig["side"].to_numpy()):
+    for ts, side in zip(fires["ts"].to_numpy(), fires["side"].to_numpy()):
         i = pos.get(int(ts))
         if i is None or i <= busy or i + 1 >= n:
             continue
@@ -148,6 +153,14 @@ def build(symbol, variant="lq"):
     return pd.DataFrame(rows, columns=list(_COLS)).astype(_COLS)
 
 
+def build_oos(symbol, variant="lq"):
+    """Trade list from the walk-forward OUT-OF-SAMPLE fires (the trustworthy curve)."""
+    fp = oos_fires_path(symbol)
+    if not fp.exists():
+        return pd.DataFrame(columns=list(_COLS))
+    return build(symbol, variant, fires=pd.read_parquet(fp).sort_values("ts"))
+
+
 def precompute(symbols=("NQ", "ES")):
     TR_DIR.mkdir(exist_ok=True)
     out = {}
@@ -157,12 +170,20 @@ def precompute(symbols=("NQ", "ES")):
             t.to_parquet(path(s, v), index=False)
             out[(s, v)] = t
             print(f"{s}/{v}: {len(t):,} trades -> {path(s, v).name}")
+            if oos_fires_path(s).exists():               # also build the OOS (walk-forward) curve
+                to_ = build_oos(s, v)
+                to_.to_parquet(path(s, v, oos=True), index=False)
+                print(f"{s}/{v} OOS: {len(to_):,} trades -> {path(s, v, oos=True).name}")
     return out
 
 
-def load(symbol, variant="lq", frm=None, to=None):
+def load(symbol, variant="lq", frm=None, to=None, oos=False):
     v = variant if variant in VARIANTS else "lq"
-    parts = [pd.read_parquet(p) for p in (path(symbol, v), path_live(symbol, v)) if p.exists()]
+    if oos:
+        p = path(symbol, v, oos=True)
+        parts = [pd.read_parquet(p)] if p.exists() else []
+    else:
+        parts = [pd.read_parquet(p) for p in (path(symbol, v), path_live(symbol, v)) if p.exists()]
     if not parts:
         return pd.DataFrame(columns=list(_COLS))
     t = pd.concat(parts, ignore_index=True).drop_duplicates("entry_ts", keep="last")
