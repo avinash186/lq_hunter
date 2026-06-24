@@ -207,11 +207,6 @@ def cmd_fetch(chat_id=None) -> str:
     return "\n".join(lines)
 
 
-def cmd_stop(chat_id=None) -> str:
-    HUB.stop()
-    return "🛑 Public link stopped."
-
-
 def hub_status() -> str:
     return f"🟢 Hub up: {HUB.url}" if HUB.is_up() else "🔴 Hub link down (send /hub)."
 
