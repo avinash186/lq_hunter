@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
-from src import data_loader, fetcher, liquidity, live, signals, trades, registry
+from src import data_loader, fetcher, liquidity, live, signals, trades, registry, lab
 
 app = FastAPI(title="lgbm-trader")
 app.add_middleware(GZipMiddleware, minimum_size=1024)   # compress bar payloads
@@ -304,6 +304,30 @@ def models_activate(name: str):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse({"active": registry.active_name()})
+
+
+@app.get("/api/lab/workspaces")
+def lab_ws_list():
+    return JSONResponse({"workspaces": lab.list_workspaces()})
+
+
+@app.get("/api/lab/workspace/{name}")
+def lab_ws_get(name: str):
+    d = lab.load(name)
+    return JSONResponse(d if d else {"name": name, "trades": [], "annotations": []})
+
+
+@app.put("/api/lab/workspace/{name}")
+def lab_ws_put(name: str, payload: dict):
+    if not lab.valid_name(name):
+        return JSONResponse({"error": "invalid workspace name"}, status_code=400)
+    lab.save(name, payload)
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/lab/workspace/{name}")
+def lab_ws_del(name: str):
+    return JSONResponse({"ok": lab.delete(name)})
 
 
 @app.get("/api/trades/{symbol}")

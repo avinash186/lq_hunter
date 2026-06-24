@@ -211,9 +211,34 @@
         </table></div></div>
       </div>
       <div class="lab-pane" id="lab-labeling">
-        <div class="card"><div class="card-body">
-          <p style="line-height:1.6">The <strong>labeling workspace</strong> (NQ/ES side-by-side annotation of trades + SMT, multi-timeframe FVG, liquidity, IB legs, etc., then train) is the next build. The <strong>Models</strong> tab is live now: it lists trained models with honest <strong>in-sample vs out-of-sample</strong> stats + Deflated Sharpe, flags likely overfit, and lets you set the active model. The production model is shown as a baseline.</p>
-        </div></div>
+        <div class="lab-ws-bar">
+          <input id="lab-ws-name" class="lab-ws-name" placeholder="workspace name" maxlength="60">
+          <button class="btn btn-primary btn-sm" id="lab-ws-save">Save</button>
+          <button class="btn btn-secondary btn-sm" id="lab-ws-new">New</button>
+          <select id="lab-ws-list" class="lab-ws-sel"><option value="">— open workspace —</option></select>
+          <span class="lab-tf-wrap">TF <select id="lab-tf" class="lab-ws-sel">
+            <option>1m</option><option>2m</option><option>3m</option><option selected>5m</option>
+            <option>15m</option><option>1h</option><option>1d</option></select></span>
+          <span class="lab-tools" id="lab-tools">
+            <button class="lab-tool active" data-tool="cursor" title="Pan / zoom">Cursor</button>
+            <button class="lab-tool" data-tool="long" title="Long trade">Long</button>
+            <button class="lab-tool" data-tool="short" title="Short trade">Short</button>
+            <button class="lab-tool" data-tool="fvg" title="FVG (current TF)">FVG</button>
+            <button class="lab-tool" data-tool="ifvg" title="Inverted FVG">IFVG</button>
+            <button class="lab-tool" data-tool="smt" title="SMT — click NQ pivot then ES pivot">SMT</button>
+            <button class="lab-tool" data-tool="level" title="Key level">Level</button>
+            <button class="lab-tool" data-tool="eqhl" title="Equal highs/lows">EQH/L</button>
+          </span>
+          <span class="lab-ws-status" id="lab-ws-status"></span>
+        </div>
+        <div class="lab-charts">
+          <div class="lab-chart-wrap"><div class="lab-sym-tag">NQ</div><div class="lab-chart" id="lab-chart-nq"></div><canvas class="lab-ovl" id="lab-ovl-nq"></canvas></div>
+          <div class="lab-chart-wrap"><div class="lab-sym-tag">ES</div><div class="lab-chart" id="lab-chart-es"></div><canvas class="lab-ovl" id="lab-ovl-es"></canvas></div>
+        </div>
+        <div class="lab-side">
+          <div class="lab-side-head">Labeled trades (<span id="lab-trade-count">0</span>)</div>
+          <div class="lab-trade-list" id="lab-trade-list"></div>
+        </div>
       </div>
     </div>
 
@@ -225,5 +250,6 @@
 <script src="/ui/app.js"></script>
 <script src="/ui/chart.js"></script>
 <script src="/ui/lab.js"></script>
+<script src="/ui/labchart.js"></script>
 </body>
 </html>

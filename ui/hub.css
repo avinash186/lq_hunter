@@ -436,6 +436,35 @@ td.c-green,.c-green{color:var(--green)}
 .lab-pane.active{display:block}
 .lab-badge{display:inline-block;background:var(--ad);color:var(--accent);border:1px solid var(--am);border-radius:5px;padding:2px 8px;font-size:11px;font-weight:700}
 .lab-active-row{background:rgba(0,210,255,.05)}
+/* Labeling workspace */
+#page-lab.active{display:flex;flex-direction:column}
+#lab-labeling{flex:1;display:none;flex-direction:column;min-height:0}
+#lab-labeling.active{display:flex}
+.lab-ws-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.lab-ws-name{background:var(--s1);border:1px solid var(--b1);color:var(--t1);border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;width:170px}
+.lab-ws-sel{background:var(--s1);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:5px 8px;font-size:12px;font-family:inherit;cursor:pointer}
+.lab-tf-wrap{font-size:11px;color:var(--t3);display:flex;align-items:center;gap:4px}
+.lab-tools{display:flex;gap:4px;margin-left:6px;flex-wrap:wrap}
+.lab-tool{background:var(--s2);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit}
+.lab-tool:hover{color:var(--t1);border-color:var(--b2)}
+.lab-tool.active{background:var(--ad);color:var(--accent);border-color:var(--am)}
+.lab-ws-status{font-size:11px;color:var(--t3);margin-left:auto}
+.lab-charts{display:flex;gap:8px;flex:1;min-height:280px}
+.lab-chart-wrap{position:relative;flex:1;min-width:0;border:1px solid var(--b1);border-radius:8px;overflow:hidden;background:#080a12}
+.lab-chart{position:absolute;inset:0}
+.lab-ovl{position:absolute;inset:0;z-index:5}
+.lab-sym-tag{position:absolute;top:6px;left:8px;z-index:6;font-size:12px;font-weight:700;color:var(--t2);background:rgba(8,10,18,.7);padding:1px 7px;border-radius:4px;pointer-events:none}
+.lab-side{margin-top:10px;max-height:160px;overflow:auto;border:1px solid var(--b1);border-radius:8px;background:var(--s1)}
+.lab-side-head{padding:7px 12px;font-size:12px;font-weight:700;color:var(--t2);border-bottom:1px solid var(--b1);position:sticky;top:0;background:var(--s1)}
+.lab-trade-list{padding:6px 10px}
+.lab-trade-list .empty{color:var(--t3);font-size:12px;padding:6px 2px}
+.lab-trow{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);padding:3px 0}
+.lab-trow input{width:64px;background:var(--s2);border:1px solid var(--b1);color:var(--t1);border-radius:4px;padding:2px 5px;font-size:11px;font-family:inherit}
+.lab-tside{font-weight:700;border-radius:4px;padding:1px 6px;font-size:10px}
+.lab-tside.long{color:var(--green);background:rgba(38,166,154,.12)}
+.lab-tside.short{color:var(--red);background:rgba(239,83,80,.12)}
+.lab-del{background:none;border:none;color:var(--t3);cursor:pointer;font-size:15px;margin-left:auto;line-height:1}
+.lab-del:hover{color:var(--red)}
 
 .cx-host{flex:0 0 auto;height:calc(100vh - var(--th) - 92px);min-height:420px;position:relative;border:1px solid var(--b1);border-radius:var(--r);overflow:hidden;background:var(--bg)}
 /* equity curve — separate chart below the main chart (scroll down to see) */

@@ -36,6 +36,7 @@
       var p = b.getAttribute('data-lab');
       document.querySelectorAll('.lab-pane').forEach(function (x) { x.classList.remove('active'); });
       el('lab-' + p).classList.add('active');
+      if (p === 'labeling' && window.labchart) window.labchart.show();
     },
     loadModels: function () {
       var body = el('lab-models-body'); if (!body) return;
