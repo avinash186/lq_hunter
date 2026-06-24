@@ -53,6 +53,7 @@
     var tr = srv.cxtrades;
     if (tr) {
       if (typeof tr.on === 'boolean') TRADES.on = tr.on;
+      if (tr.variant) TRADES.variant = tr.variant;
       if (tr.winOp != null) TRADES.winOp = tr.winOp;
       if (tr.lossOp != null) TRADES.lossOp = tr.lossOp;
     }
@@ -637,9 +638,10 @@
   // TradingView-style position boxes from /api/trades: target zone (entry->TP) green,
   // stop zone (entry->SL) red, spanning entry->exit time. One position at a time.
   var TRADES = (function () {
-    var d = { on: true, winOp: 50, lossOp: 35 };
+    var d = { on: true, variant: 'lq', winOp: 50, lossOp: 35 };
     var s = JSON.parse(localStorage.getItem('cxtrades') || 'null');
-    if (s) { d.on = s.on !== false; if (s.winOp != null) d.winOp = s.winOp; if (s.lossOp != null) d.lossOp = s.lossOp; }
+    if (s) { d.on = s.on !== false; if (s.variant) d.variant = s.variant;
+      if (s.winOp != null) d.winOp = s.winOp; if (s.lossOp != null) d.lossOp = s.lossOp; }
     return d;
   })();
   function saveTrades() { localStorage.setItem('cxtrades', JSON.stringify(TRADES)); scheduleServerSave(); }
@@ -651,14 +653,16 @@
     }
     var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
     var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
-    if (S.sym === tradesCache.key && vfrom >= tradesCache.from && vto <= tradesCache.to) return;
+    var key = S.sym + ':' + TRADES.variant;
+    if (key === tradesCache.key && vfrom >= tradesCache.from && vto <= tradesCache.to) return;
     var pad = Math.max(vto - vfrom, 7200), my = ++tradesReq;
     var u = new URL('/api/trades/' + S.sym, location.origin);
     u.searchParams.set('from', Math.floor(vfrom - pad)); u.searchParams.set('to', Math.ceil(vto + pad));
+    u.searchParams.set('variant', TRADES.variant);
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       if (my !== tradesReq) return;
       tradesData = d.trades || [];
-      tradesCache = { key: S.sym, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
+      tradesCache = { key: key, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
       redrawLevels();
     }).catch(function () {});
   }
@@ -688,6 +692,11 @@
     if (b) {
       b.classList.toggle('active', TRADES.on);
       b.onclick = function () { TRADES.on = !TRADES.on; saveTrades(); b.classList.toggle('active', TRADES.on); scheduleTradesFetch(); };
+    }
+    var sel = $('cx-trade-model');
+    if (sel) {
+      sel.value = TRADES.variant;
+      sel.onchange = function () { TRADES.variant = this.value; saveTrades(); tradesCache = { key: null, from: 0, to: 0 }; scheduleTradesFetch(); };
     }
     var w = $('cx-tr-winop'), l = $('cx-tr-lossop');
     if (w) { w.value = TRADES.winOp; $('cx-tr-winop-val').textContent = TRADES.winOp + '%';

@@ -259,14 +259,14 @@ def scores(symbol: str, frm: int | None = Query(None, alias="from"),
 
 @app.get("/api/trades/{symbol}")
 def trade_list(symbol: str, frm: int | None = Query(None, alias="from"),
-               to: int | None = Query(None)):
-    """One-position-at-a-time trades (liquidity-level exit + MNQ sizing) overlapping
-    [from, to]. Each: {entry_ts, exit_ts, side, entry, tp, sl, sl_pts, contracts,
-    risk_usd, R, pnl_usd, outcome}. The chart draws position boxes + an equity curve."""
+               to: int | None = Query(None), variant: str = "lq"):
+    """One-position-at-a-time trades overlapping [from, to]. ``variant`` selects the
+    exit: 'lq' (liquidity levels) or 'atr' (base ±1.5·ATR). Each: {entry_ts, exit_ts,
+    side, entry, tp, sl, sl_pts, contracts, risk_usd, R, pnl_usd, outcome}."""
     symbol = symbol.upper()
     if symbol not in config.SYMBOLS:
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
-    t = trades.load(symbol, frm, to)
+    t = trades.load(symbol, variant, frm, to)
     out = [{"entry_ts": int(r.entry_ts), "exit_ts": int(r.exit_ts), "side": int(r.side),
             "entry": float(r.entry), "tp": float(r.tp), "sl": float(r.sl),
             "sl_pts": float(r.sl_pts), "contracts": int(r.contracts),

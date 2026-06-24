@@ -424,6 +424,7 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 .cx-sym:hover,.cx-tf:hover,.cx-tool:hover{color:var(--t1);border-color:var(--b2)}
 .cx-sym.active,.cx-tf.active,.cx-tool.active{background:var(--ad);color:var(--accent);border-color:var(--am)}
 .cx-tool{padding:5px 9px}
+.cx-model-sel{background:var(--s1);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:4px 6px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer}
 
 .cx-host{flex:1;min-height:0;position:relative;border:1px solid var(--b1);border-radius:var(--r);overflow:hidden;background:var(--bg)}
 #cx-chart{position:absolute;inset:0}
