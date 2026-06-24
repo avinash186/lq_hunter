@@ -52,6 +52,63 @@ def send(text: str, *, parse_mode: str | None = None) -> bool:
     return send_to(config.TELEGRAM_CHAT_ID, text, parse_mode=parse_mode)
 
 
+# ── Command listener (for /kill etc.) ──────────────────────────────────────
+_UPDATES = "https://api.telegram.org/bot{token}/getUpdates"
+
+
+def parse_command(update: dict, authorized_chat_id) -> tuple[str, str] | None:
+    """Extract a slash command from a Telegram update, but ONLY from the authorized
+    chat (others are ignored). Returns (command_word, chat_id) or None. Pure/testable.
+    '/kill@MyBot extra' -> ('kill', chat_id)."""
+    msg = (update or {}).get("message") or (update or {}).get("edited_message") or {}
+    text = (msg.get("text") or "").strip()
+    chat_id = str(((msg.get("chat") or {}).get("id", "")))
+    if not text.startswith("/") or not chat_id:
+        return None
+    if str(authorized_chat_id) and chat_id != str(authorized_chat_id):
+        return None                                   # ignore anyone but the owner
+    word = text[1:].split()[0].split("@")[0].lower()
+    return (word, chat_id)
+
+
+def poll_commands(handlers: dict, *, stop=None, long_poll: int = 45) -> None:
+    """Long-poll getUpdates and dispatch authorized slash commands to ``handlers``
+    (a {command: callable->str} map; the returned string is sent back). Never raises;
+    runs until ``stop`` (a threading.Event) is set. Owner = config.TELEGRAM_CHAT_ID."""
+    if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
+        log.warning("telegram command listener: not configured — disabled")
+        return
+    url = _UPDATES.format(token=config.TELEGRAM_BOT_TOKEN)
+    offset = None
+    log.info("telegram command listener up (commands: %s)", ", ".join(sorted(handlers)))
+    while not (stop and stop.is_set()):
+        try:
+            params = {"timeout": long_poll, "allowed_updates": ["message"]}
+            if offset is not None:
+                params["offset"] = offset
+            r = requests.get(url, params=params, timeout=long_poll + 15)
+            for upd in (r.json().get("result", []) if r.ok else []):
+                offset = upd["update_id"] + 1
+                parsed = parse_command(upd, config.TELEGRAM_CHAT_ID)
+                if not parsed:
+                    continue
+                cmd, chat_id = parsed
+                fn = handlers.get(cmd)
+                if not fn:
+                    continue
+                try:
+                    reply = fn()
+                except Exception as exc:               # noqa: BLE001
+                    log.exception("command /%s failed", cmd)
+                    reply = f"⚠️ /{cmd} error: {exc}"
+                if reply:
+                    send_to(chat_id, str(reply))
+        except requests.RequestException as exc:
+            log.warning("telegram command poll error: %s", exc)
+            if stop:
+                stop.wait(3)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=config.LOG_LEVEL)
     ok = send("✅ lgbm-trader: Telegram is wired up.")
