@@ -109,6 +109,99 @@ def front_contract(symbol: str) -> str:
     return cid
 
 
+# ── Execution (ProjectX order routing) ─────────────────────────────────────
+# Order type enums (ProjectX): 1=Limit 2=Market 4=Stop 5=TrailingStop.
+OT_LIMIT, OT_MARKET, OT_STOP = 1, 2, 4
+# Side enums: 0=Bid(buy) 1=Ask(sell). Our signal convention is 1=long / 0=short.
+def _broker_side(side: int) -> int:
+    return 0 if int(side) == 1 else 1
+
+
+def token() -> str:
+    """Current bearer token (logs in if needed). Used for the SignalR user-hub
+    access_token query param."""
+    global _token
+    if _token is None:
+        _token = _login()
+    return _token
+
+
+def validate_token() -> bool:
+    """Proactively revalidate the JWT (keeps the session warm for low latency)."""
+    try:
+        j = _post("/api/Auth/validate", {})
+        return bool(j.get("success", True))
+    except Exception:                       # noqa: BLE001 — never crash the caller
+        return False
+
+
+def exec_contract(symbol: str) -> str:
+    """Front-month MICRO execution contract id (NQ->MNQ, ES->MES)."""
+    root = config.EXEC_CONTRACT_ROOT.get(symbol.upper())
+    if not root:
+        raise TopstepError(f"no execution contract mapping for {symbol!r}")
+    micro = "M" + symbol.upper()                      # NQ->MNQ, ES->MES search text
+    j = _post("/api/Contract/search", {"searchText": micro, "live": False})
+    cands = [c for c in j.get("contracts", [])
+             if c.get("id", "").startswith(root) and c.get("activeContract")]
+    if not cands:
+        raise TopstepError(f"no active micro contract found for {micro!r}")
+    cands.sort(key=lambda c: _expiry_key(c["id"]))
+    return cands[0]["id"]
+
+
+def points_to_ticks(symbol: str, points: float) -> int:
+    """Convert a price distance (points) to integer ticks for a bracket offset."""
+    tick = config.TICK_SIZE.get(symbol.upper(), 0.25)
+    return max(1, int(round(abs(points) / tick)))
+
+
+def build_order_payload(account_id, contract_id: str, side: int, size: int,
+                        sl_ticks: int, tp_ticks: int, custom_tag: str | None) -> dict:
+    """Pure builder for a MARKET entry + OCO bracket (TICK offsets). Testable."""
+    body: dict = {"accountId": int(account_id), "contractId": contract_id,
+                  "type": OT_MARKET, "side": _broker_side(side), "size": int(size)}
+    if custom_tag:
+        body["customTag"] = str(custom_tag)
+    if sl_ticks and sl_ticks > 0:
+        body["stopLossBracket"] = {"ticks": int(sl_ticks), "type": OT_STOP}
+    if tp_ticks and tp_ticks > 0:
+        body["takeProfitBracket"] = {"ticks": int(tp_ticks), "type": OT_LIMIT}
+    return body
+
+
+def place_bracket_order(account_id, contract_id: str, side: int, size: int,
+                        sl_ticks: int, tp_ticks: int, custom_tag: str | None = None) -> dict:
+    """Submit a market entry + linked OCO bracket in one call. Returns the API response
+    (contains orderId on success)."""
+    body = build_order_payload(account_id, contract_id, side, size, sl_ticks, tp_ticks, custom_tag)
+    return _post("/api/Order/place", body)
+
+
+def search_open_positions(account_id) -> list[dict]:
+    j = _post("/api/Position/searchOpen", {"accountId": int(account_id)})
+    return j.get("positions", []) or []
+
+
+def search_open_orders(account_id) -> list[dict]:
+    j = _post("/api/Order/searchOpen", {"accountId": int(account_id)})
+    return j.get("orders", []) or []
+
+
+def cancel_order(account_id, order_id) -> dict:
+    return _post("/api/Order/cancel", {"accountId": int(account_id), "orderId": int(order_id)})
+
+
+def close_position(account_id, contract_id: str) -> dict:
+    return _post("/api/Position/closeContract", {"accountId": int(account_id), "contractId": contract_id})
+
+
+def search_accounts(only_active: bool = True) -> list[dict]:
+    """Active trading accounts for the API user (id / name / balance / canTrade)."""
+    j = _post("/api/Account/search", {"onlyActiveAccounts": bool(only_active)})
+    return j.get("accounts", []) or []
+
+
 def candidate_contracts(symbol: str, start: datetime) -> list[str]:
     """Quarterly contract ids spanning the quarter that covers ``start`` through
     the current front month, inclusive — e.g. ['…ENQ.M26', '…ENQ.U26'].
