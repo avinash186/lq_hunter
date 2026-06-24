@@ -45,3 +45,15 @@ SYMBOLS = ["NQ", "ES"]
 
 # Minimum price increment per symbol — used to treat near-equal levels as one.
 TICK_SIZE = {"NQ": 0.25, "ES": 0.25}
+
+# ── Execution / trade sizing (liquidity-level exit layer) ──
+# Max dollar risk per trade. Dynamic MNQ/MES sizing keeps each trade at or under this;
+# the SL distance is capped at MAX_RISK_PER_TRADE / EXEC_POINT_VALUE points so 1 micro
+# contract always fits. NOTE: at $200 the worst backtested drawdown (~-9.7R) ≈ $1,940,
+# essentially the full $2,000 trailing limit — little margin.
+MAX_RISK_PER_TRADE = float(os.getenv("MAX_RISK_PER_TRADE", "200"))
+# Dollars per index point of the EXECUTION contract (micros): MNQ $2, MES $5.
+EXEC_POINT_VALUE = {"NQ": 2.0, "ES": 5.0}
+# Symbols actually TRADED live (open trades + Telegram alerts). NQ only — ES is too
+# weak / overfit-prone (docs/research_exit_strategy.md). Others are still scored/charted.
+TRADE_SYMBOLS = [s.strip().upper() for s in os.getenv("TRADE_SYMBOLS", "NQ").split(",") if s.strip()]

@@ -25,7 +25,7 @@
     try {
       fetch('/api/settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cx: S, cxlevels: LV, cxscore: SCORE }),
+        body: JSON.stringify({ cx: S, cxlevels: LV, cxscore: SCORE, cxtrades: TRADES }),
       }).catch(function () {});
     } catch (e) {}
   }
@@ -49,6 +49,13 @@
       if (sc.legendOp != null) SCORE.legendOp = sc.legendOp;
       if (sc.view && typeof sc.view.lo === 'number') { scoreView.lo = sc.view.lo; scoreView.hi = sc.view.hi; }
       if (sc.lines) ['mid', 'up', 'down'].forEach(function (k) { if (sc.lines[k]) Object.assign(SCORE.lines[k], sc.lines[k]); });
+    }
+    var tr = srv.cxtrades;
+    if (tr) {
+      if (typeof tr.on === 'boolean') TRADES.on = tr.on;
+      if (tr.variant) TRADES.variant = tr.variant;
+      if (tr.winOp != null) TRADES.winOp = tr.winOp;
+      if (tr.lossOp != null) TRADES.lossOp = tr.lossOp;
     }
   }
 
@@ -130,6 +137,15 @@
       redrawLevels();
       if (midLine) midLine.applyOptions({ color: midColor() });
     }
+    if (eqChart) {
+      var lg = S.theme === 'light';
+      eqChart.applyOptions({
+        layout: { background: { type: 'solid', color: lg ? '#ffffff' : '#080a12' }, textColor: lg ? '#18202e' : '#8892a4' },
+        grid: { vertLines: { color: lg ? 'rgba(20,30,50,.07)' : 'rgba(37,40,64,.35)' }, horzLines: { color: lg ? 'rgba(20,30,50,.07)' : 'rgba(37,40,64,.35)' } },
+        rightPriceScale: { borderColor: lg ? '#dde3ec' : '#252840' }, timeScale: { borderColor: lg ? '#dde3ec' : '#252840' },
+      });
+      applyEqColors();
+    }
   }
 
   function init() {
@@ -170,9 +186,12 @@
       tickCountdown();
       scheduleLvFetch();
       scheduleScoreFetch();
+      scheduleTradesFetch();
       scheduleRangeSave();
     });
     wireScore();
+    wireTrades();
+    initEquity();
     chart.subscribeCrosshairMove(function (param) {
       var b;
       if (param && param.time) {
@@ -256,6 +275,8 @@
       scheduleLvFetch();
       applyScoreLayout();
       scheduleScoreFetch();
+      scheduleTradesFetch();
+      loadEquity();
       loadFired(S.sym);
       updateMidpoint();
       setLoading(false);
@@ -457,6 +478,15 @@
       scheduleMid();
     } else if (ev.e === 'reconciled') { scheduleLvFetch(); scheduleMid(); }
     else if (ev.e === 'model_score') applyScore(ev);
+    else if (ev.e === 'trade_open') { liveTrade = ev; redrawLevels(); }
+    else if (ev.e === 'trade_close') {
+      liveTrade = null;
+      if (TRADES.variant === 'lq') {            // the live engine trades the LQ exit
+        tradesData.push(ev); eqTrades.push(ev); renderEquity();
+      }
+      redrawLevels();
+    }
+    if (liveTrade && ev.e === 'bar_close') redrawLevels();   // extend the open box each bar
   }
   function applyLiveBar(ev) {
     var b = ev.bar;
@@ -623,6 +653,175 @@
       scoreCache = { key: S.sym, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
       updateScoreMarkers(); redrawLevels();
     }).catch(function () {});
+  }
+  // ─────────────── trades (liquidity-level exit + MNQ sizing) ───────────────
+  // TradingView-style position boxes from /api/trades: target zone (entry->TP) green,
+  // stop zone (entry->SL) red, spanning entry->exit time. One position at a time.
+  var TRADES = (function () {
+    var d = { on: true, variant: 'lq', winOp: 50, lossOp: 35 };
+    var s = JSON.parse(localStorage.getItem('cxtrades') || 'null');
+    if (s) { d.on = s.on !== false; if (s.variant) d.variant = s.variant;
+      if (s.winOp != null) d.winOp = s.winOp; if (s.lossOp != null) d.lossOp = s.lossOp; }
+    return d;
+  })();
+  function saveTrades() { localStorage.setItem('cxtrades', JSON.stringify(TRADES)); scheduleServerSave(); }
+  var tradesData = [], tradesCache = { key: null, from: 0, to: 0 }, tradesReq = 0, tradesFetchT = 0;
+  var liveTrade = null;                         // the open trade (drawn extending live)
+  function scheduleTradesFetch() { clearTimeout(tradesFetchT); tradesFetchT = setTimeout(maybeFetchTrades, 300); }
+  function maybeFetchTrades() {
+    if (!TRADES.on || S.tf !== '1m' || !bars.length || !candle) {
+      tradesData = []; tradesCache = { key: null, from: 0, to: 0 }; redrawLevels(); return;
+    }
+    var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
+    var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
+    var key = S.sym + ':' + TRADES.variant;
+    if (key === tradesCache.key && vfrom >= tradesCache.from && vto <= tradesCache.to) return;
+    var pad = Math.max(vto - vfrom, 7200), my = ++tradesReq;
+    var u = new URL('/api/trades/' + S.sym, location.origin);
+    u.searchParams.set('from', Math.floor(vfrom - pad)); u.searchParams.set('to', Math.ceil(vto + pad));
+    u.searchParams.set('variant', TRADES.variant);
+    fetch(u).then(function (r) { return r.json(); }).then(function (d) {
+      if (my !== tradesReq) return;
+      tradesData = d.trades || [];
+      tradesCache = { key: key, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
+      redrawLevels();
+    }).catch(function () {});
+  }
+  function drawTrades(ctx, rightX) {
+    if (!TRADES.on || S.tf !== '1m' || !candle || (!tradesData.length && !liveTrade)) return;
+    var win = TRADES.winOp / 100, loss = TRADES.lossOp / 100;
+    for (var i = 0; i < tradesData.length; i++) {
+      var t = tradesData[i];
+      var x1 = timeToX(t.entry_ts), x2 = timeToX(t.exit_ts);
+      if (x1 == null || x2 == null || x2 < 0 || x1 > rightX) continue;
+      var ye = priceToY(t.entry), yt = priceToY(t.tp), ys = priceToY(t.sl);
+      if (ye == null || yt == null || ys == null) continue;
+      var w = Math.max(1.5, x2 - x1);
+      ctx.fillStyle = hexToRgba(S.up, win);                    // target zone (profit) green
+      ctx.fillRect(x1, Math.min(ye, yt), w, Math.abs(yt - ye));
+      ctx.fillStyle = hexToRgba(S.down, loss);                 // stop zone (loss) red
+      ctx.fillRect(x1, Math.min(ye, ys), w, Math.abs(ys - ye));
+      ctx.setLineDash([]); ctx.lineWidth = 1;
+      ctx.strokeStyle = hexToRgba('#cbd5e1', 0.55);            // entry line + outline
+      ctx.beginPath(); ctx.moveTo(x1, ye); ctx.lineTo(x2, ye); ctx.stroke();
+      ctx.strokeStyle = hexToRgba('#8892a4', 0.35);
+      ctx.strokeRect(x1, Math.min(yt, ys), w, Math.abs(ys - yt));
+    }
+    if (liveTrade) {                            // the open trade — box extends to the latest bar
+      var lt = liveTrade, lx1 = timeToX(lt.entry_ts);
+      var lx2 = bars.length ? timeToX(bars[bars.length - 1].time) : null;
+      var le = priceToY(lt.entry), ltp = priceToY(lt.tp), lsl = priceToY(lt.sl);
+      if (lx1 != null && lx2 != null && le != null && ltp != null && lsl != null) {
+        var lw = Math.max(2, lx2 - lx1);
+        ctx.fillStyle = hexToRgba(S.up, win); ctx.fillRect(lx1, Math.min(le, ltp), lw, Math.abs(ltp - le));
+        ctx.fillStyle = hexToRgba(S.down, loss); ctx.fillRect(lx1, Math.min(le, lsl), lw, Math.abs(lsl - le));
+        ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.strokeStyle = hexToRgba('#00d2ff', 0.95);
+        ctx.strokeRect(lx1, Math.min(ltp, lsl), lw, Math.abs(lsl - ltp)); ctx.setLineDash([]);
+      }
+    }
+  }
+  function wireTrades() {
+    var b = $('cx-trades-toggle');
+    if (b) {
+      b.classList.toggle('active', TRADES.on);
+      b.onclick = function () { TRADES.on = !TRADES.on; saveTrades(); b.classList.toggle('active', TRADES.on); scheduleTradesFetch(); };
+    }
+    var sel = $('cx-trade-model');
+    if (sel) {
+      sel.value = TRADES.variant;
+      sel.onchange = function () { TRADES.variant = this.value; saveTrades(); tradesCache = { key: null, from: 0, to: 0 }; scheduleTradesFetch(); loadEquity(); };
+    }
+    var w = $('cx-tr-winop'), l = $('cx-tr-lossop');
+    if (w) { w.value = TRADES.winOp; $('cx-tr-winop-val').textContent = TRADES.winOp + '%';
+      w.oninput = function () { TRADES.winOp = +this.value; $('cx-tr-winop-val').textContent = TRADES.winOp + '%'; saveTrades(); redrawLevels(); }; }
+    if (l) { l.value = TRADES.lossOp; $('cx-tr-lossop-val').textContent = TRADES.lossOp + '%';
+      l.oninput = function () { TRADES.lossOp = +this.value; $('cx-tr-lossop-val').textContent = TRADES.lossOp + '%'; saveTrades(); redrawLevels(); }; }
+  }
+  // ─────────────── equity curve (separate chart below) ───────────────
+  var eqChart = null, eqSeries = null, eqTrades = [];
+  var EQ = (function () {
+    var d = { unit: 'usd', start: null, snap: false, oos: false };
+    var s = JSON.parse(localStorage.getItem('cxeq') || 'null');
+    if (s) { if (s.unit) d.unit = s.unit; if (s.start != null) d.start = s.start; d.snap = !!s.snap; d.oos = !!s.oos; }
+    return d;
+  })();
+  function saveEq() { localStorage.setItem('cxeq', JSON.stringify(EQ)); }
+  function applyEqSnap() {
+    if (!eqChart || !EQ.snap || !chart) return;
+    try { var r = chart.timeScale().getVisibleRange(); if (r) eqChart.timeScale().setVisibleRange(r); } catch (e) {}
+  }
+  function wireEq() {
+    document.querySelectorAll('.cx-eq-unit').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-unit') === EQ.unit);
+      b.onclick = function () { EQ.unit = b.getAttribute('data-unit'); saveEq();
+        document.querySelectorAll('.cx-eq-unit').forEach(function (x) { x.classList.toggle('active', x === b); }); renderEquity(); };
+    });
+    var df = $('cx-eq-from');
+    if (df) {
+      if (EQ.start) df.value = new Date(EQ.start * 1000).toISOString().slice(0, 10);
+      df.onchange = function () { EQ.start = this.value ? Math.floor(Date.parse(this.value + 'T00:00:00Z') / 1000) : null; saveEq(); renderEquity(); };
+    }
+    var all = $('cx-eq-all');
+    if (all) all.onclick = function () { EQ.start = null; if (df) df.value = ''; saveEq(); renderEquity(); };
+    var snap = $('cx-eq-snap');
+    if (snap) {
+      snap.classList.toggle('active', EQ.snap);
+      snap.onclick = function () { EQ.snap = !EQ.snap; saveEq(); snap.classList.toggle('active', EQ.snap);
+        if (EQ.snap) applyEqSnap(); else if (eqChart) eqChart.timeScale().fitContent(); };
+    }
+    var oos = $('cx-eq-oos');
+    if (oos) {
+      oos.classList.toggle('active', EQ.oos);
+      oos.onclick = function () { EQ.oos = !EQ.oos; saveEq(); oos.classList.toggle('active', EQ.oos); loadEquity(); };
+    }
+  }
+  function initEquity() {
+    var el = $('cx-equity-chart'); if (!el || !window.LightweightCharts || eqChart) return;
+    var light = S.theme === 'light';
+    eqChart = LightweightCharts.createChart(el, {
+      width: el.clientWidth, height: el.clientHeight,
+      layout: { background: { type: 'solid', color: light ? '#ffffff' : '#080a12' }, textColor: light ? '#18202e' : '#8892a4', fontSize: 11 },
+      grid: { vertLines: { color: light ? 'rgba(20,30,50,.07)' : 'rgba(37,40,64,.35)' }, horzLines: { color: light ? 'rgba(20,30,50,.07)' : 'rgba(37,40,64,.35)' } },
+      rightPriceScale: { borderColor: light ? '#dde3ec' : '#252840' },
+      timeScale: { borderColor: light ? '#dde3ec' : '#252840', timeVisible: false, secondsVisible: false },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    });
+    eqSeries = eqChart.addAreaSeries({ lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+    applyEqColors();
+    new ResizeObserver(function () { if (eqChart) eqChart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); }).observe(el);
+    chart.timeScale().subscribeVisibleTimeRangeChange(function () { if (EQ.snap) applyEqSnap(); });
+    wireEq();
+  }
+  function applyEqColors() {
+    if (eqSeries) eqSeries.applyOptions({ lineColor: S.up, topColor: hexToRgba(S.up, 0.28), bottomColor: hexToRgba(S.up, 0.02) });
+  }
+  function loadEquity() {
+    if (!eqSeries) return;
+    var u = new URL('/api/trades/' + S.sym, location.origin);
+    u.searchParams.set('variant', TRADES.variant); u.searchParams.set('oos', EQ.oos ? '1' : '0');
+    fetch(u).then(function (r) { return r.json(); }).then(function (d) { eqTrades = d.trades || []; renderEquity(); }).catch(function () {});
+  }
+  function renderEquity() {
+    if (!eqSeries) return;
+    var cum = 0, data = [], wins = 0, n = 0, peak = 0, dd = 0, lastT = 0, usd = EQ.unit === 'usd';
+    for (var i = 0; i < eqTrades.length; i++) {
+      var t = eqTrades[i];
+      if (EQ.start && t.exit_ts < EQ.start) continue;     // track from the chosen date, rebased to 0
+      n++;
+      cum += usd ? t.pnl_usd : t.R;
+      var tm = t.exit_ts; if (tm <= lastT) tm = lastT + 1; lastT = tm;   // strictly increasing for LWC
+      data.push({ time: tm, value: +cum.toFixed(usd ? 2 : 3) });
+      if (t.R > 0) wins++;
+      if (cum > peak) peak = cum;
+      if (cum - peak < dd) dd = cum - peak;
+    }
+    eqSeries.setData(data); applyEqColors();
+    if (data.length) { if (EQ.snap) applyEqSnap(); else eqChart.timeScale().fitContent(); }
+    var p = usd ? '$' : '';
+    $('cx-eq-stat').textContent = n
+      ? n + ' trades · win ' + (100 * wins / n).toFixed(1) + '% · total ' + p + (usd ? cum.toFixed(0) : cum.toFixed(1))
+        + ' · maxDD ' + p + (usd ? dd.toFixed(0) : dd.toFixed(1))
+      : 'no trades';
   }
   function updateScoreMarkers() {
     if (!candle) return;
@@ -913,6 +1112,7 @@
       if ((closest || st.label) && lv.side !== 'mid')
         labels.push({ y: y, x: Math.min(x2, rightX) - 4, text: labelText(lv), color: col });
     });
+    drawTrades(ctx, rightX);
     drawLabels(ctx, labels);
     redrawScore(ctx, c, rightX);
   }

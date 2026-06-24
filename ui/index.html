@@ -72,6 +72,11 @@
         <div class="cx-tools">
           <button class="cx-tool active" id="cx-levels-btn" title="Liquidity levels">Liq</button>
           <button class="cx-tool active" id="cx-sig-toggle" title="Model signals (Stage-1 score)">Sig</button>
+          <button class="cx-tool active" id="cx-trades-toggle" title="Trade positions (liquidity-level exit)">Trd</button>
+          <select id="cx-trade-model" class="cx-model-sel" title="Exit model for plotted trades">
+            <option value="lq">LQ levels</option>
+            <option value="atr">&plusmn;1.5 ATR</option>
+          </select>
           <button class="cx-tool active" id="cx-vol-toggle" title="Toggle volume">Vol</button>
           <button class="cx-tool" id="cx-fullscreen" title="Fullscreen">&#9974;</button>
           <button class="cx-tool" id="cx-settings-btn" title="Chart settings">&#9881;</button>
@@ -104,11 +109,28 @@
           <div class="cx-sl-head" style="margin-top:10px">Model gate thresholds (fixed)</div>
           <div class="cx-sl-thr"><span class="cx-sl-sw" id="cx-up-sw"></span>Up (long)<b class="cx-thr-val" id="cx-up-thr">—</b></div>
           <div class="cx-sl-thr"><span class="cx-sl-sw" id="cx-down-sw"></span>Down (short)<b class="cx-thr-val" id="cx-down-thr">—</b></div>
+          <div class="cx-set-title" style="margin-top:16px">Trades</div>
+          <div class="cx-set-row"><label>Win zone opacity</label><input type="range" id="cx-tr-winop" min="0" max="100"><span class="cx-set-op-val" id="cx-tr-winop-val"></span></div>
+          <div class="cx-set-row"><label>Loss zone opacity</label><input type="range" id="cx-tr-lossop" min="0" max="100"><span class="cx-set-op-val" id="cx-tr-lossop-val"></span></div>
         </div>
         <div class="cx-levels-panel" id="cx-levels-panel">
           <div class="cx-lp-head"><span class="cx-set-title">Liquidity Levels</span><button class="cx-lp-x" id="cx-lp-x">&times;</button></div>
           <div class="cx-lp-body" id="cx-lp-body"></div>
         </div>
+      </div>
+      <div class="cx-equity" id="cx-equity">
+        <div class="cx-eq-head">
+          <span class="cx-eq-title">Equity curve</span>
+          <span class="cx-eq-stat" id="cx-eq-stat"></span>
+          <span class="cx-eq-ctrls">
+            <button class="cx-eq-btn" id="cx-eq-oos" title="Walk-forward OUT-OF-SAMPLE equity (trustworthy, no in-sample leakage)">OOS</button>
+            <input type="date" id="cx-eq-from" class="cx-eq-date" title="Start tracking from this date (rebased to 0)">
+            <button class="cx-eq-btn" id="cx-eq-all" title="Track from the beginning">All</button>
+            <button class="cx-eq-btn" id="cx-eq-snap" title="Snap to the main chart's time axis">Snap</button>
+            <span class="cx-eq-units"><button class="cx-eq-unit active" data-unit="usd">$</button><button class="cx-eq-unit" data-unit="r">R</button></span>
+          </span>
+        </div>
+        <div id="cx-equity-chart"></div>
       </div>
     </div>
 
