@@ -414,7 +414,7 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 
 /* ════════════ TradingView-style chart page ════════════ */
 #page-chart{padding:0}
-#page-chart.active{display:flex;flex-direction:column;height:calc(100vh - var(--th) - 56px)}
+#page-chart.active{display:flex;flex-direction:column}
 #page-chart:fullscreen,#page-chart:-webkit-full-screen{height:100vh;width:100vw;padding:10px;background:var(--bg)}
 .cx-toolbar{display:flex;align-items:center;gap:12px;padding:7px 10px;border:1px solid var(--b1);border-radius:var(--r);background:var(--s2);margin-bottom:10px;flex-wrap:wrap}
 .cx-syms,.cx-tfs,.cx-tools{display:flex;gap:4px;align-items:center}
@@ -426,7 +426,16 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 .cx-tool{padding:5px 9px}
 .cx-model-sel{background:var(--s1);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:4px 6px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer}
 
-.cx-host{flex:1;min-height:0;position:relative;border:1px solid var(--b1);border-radius:var(--r);overflow:hidden;background:var(--bg)}
+.cx-host{flex:0 0 auto;height:calc(100vh - var(--th) - 92px);min-height:420px;position:relative;border:1px solid var(--b1);border-radius:var(--r);overflow:hidden;background:var(--bg)}
+/* equity curve — separate chart below the main chart (scroll down to see) */
+.cx-equity{flex:0 0 auto;height:340px;margin-top:12px;display:flex;flex-direction:column;border:1px solid var(--b1);border-radius:var(--r);overflow:hidden;background:var(--bg)}
+.cx-eq-head{display:flex;align-items:center;gap:12px;padding:8px 12px;border-bottom:1px solid var(--b1);background:var(--s2)}
+.cx-eq-title{font-size:12px;font-weight:700;color:var(--t1)}
+.cx-eq-stat{font-size:11px;color:var(--t2);font-variant-numeric:tabular-nums}
+.cx-eq-units{margin-left:auto;display:flex;gap:3px}
+.cx-eq-unit{background:var(--s1);border:1px solid var(--b1);color:var(--t3);border-radius:5px;padding:2px 9px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit}
+.cx-eq-unit.active{background:var(--ad);color:var(--accent);border-color:var(--am)}
+#cx-equity-chart{flex:1;min-height:0}
 #cx-chart{position:absolute;inset:0}
 #cx-overlay{position:absolute;inset:0;z-index:3;pointer-events:none}
 .cx-legend{position:absolute;top:10px;left:12px;z-index:5;font-size:12px;font-variant-numeric:tabular-nums;color:var(--t2);pointer-events:none;display:flex;gap:10px;align-items:center;flex-wrap:wrap;text-shadow:0 1px 3px rgba(0,0,0,.6)}
