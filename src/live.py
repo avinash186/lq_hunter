@@ -347,6 +347,8 @@ class LiveEngine:
 
     # ───────────── trade engine (one position at a time) ─────────────
     def _manage_entry(self, symbol, bar, res):
+        if symbol.upper() not in config.TRADE_SYMBOLS:        # don't trade ES (too weak)
+            return
         if self._trade.get(symbol) is not None or not res.get("fire"):
             return                                            # in a trade -> discard fire
         em = _et(bar["start"]); m = em.hour * 60 + em.minute

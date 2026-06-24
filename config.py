@@ -54,3 +54,6 @@ TICK_SIZE = {"NQ": 0.25, "ES": 0.25}
 MAX_RISK_PER_TRADE = float(os.getenv("MAX_RISK_PER_TRADE", "200"))
 # Dollars per index point of the EXECUTION contract (micros): MNQ $2, MES $5.
 EXEC_POINT_VALUE = {"NQ": 2.0, "ES": 5.0}
+# Symbols actually TRADED live (open trades + Telegram alerts). NQ only — ES is too
+# weak / overfit-prone (docs/research_exit_strategy.md). Others are still scored/charted.
+TRADE_SYMBOLS = [s.strip().upper() for s in os.getenv("TRADE_SYMBOLS", "NQ").split(",") if s.strip()]
