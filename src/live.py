@@ -162,6 +162,11 @@ class LiveEngine:
                         "resume": self._cmd_resume, "status": tgcontrol.cmd_status,
                         "list": tgcontrol.cmd_list, "opt": tgcontrol.cmd_opt,
                         "help": tgcontrol.cmd_help}
+            try:                                          # /hub /fetch /stop -> the same poller
+                import bot
+                handlers.update({"hub": bot.cmd_hub, "fetch": bot.cmd_fetch, "stop": bot.cmd_stop})
+            except Exception:
+                log.exception("live: hub commands unavailable (continuing)")
             self._cmd_stop = threading.Event()
             threading.Thread(target=notify.poll_commands, args=(handlers,),
                              kwargs={"on_callback": tgcontrol.on_callback,
