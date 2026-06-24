@@ -22,21 +22,30 @@ import lightgbm as lgb
 import config
 from src.dataset import CATEGORICAL
 
-MODELS = config.DATA_DIR / "models"
+from pathlib import Path
+from src import registry
+
+MODELS = registry.ROOT          # back-compat alias (root = production model)
 
 
-@lru_cache(maxsize=1)
-def _load():
-    cfg = json.loads((MODELS / "config.json").read_text(encoding="utf-8"))
-    primary = lgb.Booster(model_file=str(MODELS / "primary.txt"))
-    meta = lgb.Booster(model_file=str(MODELS / "meta.txt"))
-    with open(MODELS / "calibrator.pkl", "rb") as f:
+@lru_cache(maxsize=6)
+def _load_dir(d: str):
+    p = Path(d)
+    cfg = json.loads((p / "config.json").read_text(encoding="utf-8"))
+    primary = lgb.Booster(model_file=str(p / "primary.txt"))
+    meta = lgb.Booster(model_file=str(p / "meta.txt"))
+    with open(p / "calibrator.pkl", "rb") as f:
         iso = pickle.load(f)
     return cfg, primary, meta, iso
 
 
+def _load():
+    # loads the ACTIVE model; defaults to the production root (unchanged behavior)
+    return _load_dir(str(registry.active_dir()))
+
+
 def available() -> bool:
-    return (MODELS / "config.json").exists()
+    return (registry.active_dir() / "config.json").exists()
 
 
 def _prep(df: pd.DataFrame, cols) -> pd.DataFrame:
