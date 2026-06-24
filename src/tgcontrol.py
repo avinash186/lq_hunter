@@ -25,6 +25,8 @@ COMMAND_MENU = [
 ]
 _pending: dict[str, str] = {}            # chat_id -> awaited input key
 _BACK = {"text": "‹ Back", "callback_data": "opt:menu"}
+_CANCEL = {"text": "✖️ Cancel", "callback_data": "opt:close"}
+_NAV = [_BACK, _CANCEL]                   # back + cancel row for every sub-menu
 
 
 def _registry():
@@ -60,7 +62,8 @@ def _opt_rows() -> list:
     return [[{"text": "💵 Max risk", "callback_data": "opt:risk"},
              {"text": "🔀 Mode", "callback_data": "opt:mode"}],
             [{"text": "🧠 Model", "callback_data": "opt:model"},
-             {"text": "🏦 Account", "callback_data": "opt:acct"}]]
+             {"text": "🏦 Account", "callback_data": "opt:acct"}],
+            [{"text": "✖️ Close", "callback_data": "opt:close"}]]
 
 
 def _opt_menu(note: str = ""):
@@ -70,14 +73,14 @@ def _opt_menu(note: str = ""):
 
 def _risk_menu():
     presets = [{"text": f"${v}", "callback_data": f"set:risk:{v}"} for v in RISK_PRESETS]
-    rows = [presets[:2], presets[2:], [{"text": "✏️ Custom", "callback_data": "set:risk:custom"}], [_BACK]]
+    rows = [presets[:2], presets[2:], [{"text": "✏️ Custom", "callback_data": "set:risk:custom"}], _NAV]
     return f"💵 Max risk (now ${settings.max_risk():.0f})", rows
 
 
 def _mode_menu():
     return ("🔀 Trading mode (now " + ("LIVE" if settings.execute_broker() else "DRY") + ")",
             [[{"text": "🧪 Dry", "callback_data": "set:mode:0"},
-              {"text": "🟢 Live", "callback_data": "set:mode:1"}], [_BACK]])
+              {"text": "🟢 Live", "callback_data": "set:mode:1"}], _NAV])
 
 
 def _model_menu():
@@ -86,7 +89,7 @@ def _model_menu():
         return _opt_menu("Only the production model is available here.")
     rows = [[{"text": ("● " if m["name"] == _model_name() else "") + m["name"],
               "callback_data": f"set:model:{m['name']}"}] for m in reg.list_models()]
-    return "🧠 Active model" + ("  (blocked while in a position)" if _position_open() else ""), rows + [[_BACK]]
+    return "🧠 Active model" + ("  (blocked while in a position)" if _position_open() else ""), rows + [_NAV]
 
 
 def _acct_menu():
@@ -97,7 +100,8 @@ def _acct_menu():
     cur = str(settings.account_id())
     rows = [[{"text": ("● " if str(a.get("id")) == cur else "") + f"{a.get('id')} {a.get('name','')}"[:40],
               "callback_data": f"set:acct:{a.get('id')}"}] for a in accts]
-    return "🏦 Account" + ("  (blocked while in a position)" if _position_open() else ""), (rows or [[]]) + [[_BACK]]
+    head = "🏦 Account" + ("  (blocked while in a position)" if _position_open() else "")
+    return (head if accts else "🏦 No active accounts."), rows + [_NAV]
 
 
 def _set_model(name: str) -> str:
@@ -118,8 +122,7 @@ def _set_model(name: str) -> str:
 
 # ── command handlers (called as fn(chat_id)) ──
 def cmd_help(chat_id=None) -> str:
-    return ("Commands:\n/opt — view & edit settings\n/list — Topstep accounts\n"
-            "/status — live status\n/kill (/flat) — flatten + halt\n/resume — re-enable\n/help")
+    return "Commands:\n" + "\n".join(f"/{c} — {d}" for c, d in COMMAND_MENU)
 
 
 def cmd_status(chat_id=None) -> str:
@@ -158,7 +161,11 @@ def cmd_opt(chat_id) -> None:
 
 # ── interactive callbacks / pending input ──
 def _route(data: str, chat):
+    if data == "opt:close":
+        _pending.pop(str(chat), None)
+        return "✅ Closed. Send /opt to reopen.", []        # empty rows -> remove keyboard
     if data in ("opt:menu", ""):
+        _pending.pop(str(chat), None)
         return _opt_menu()
     if data == "opt:risk":
         return _risk_menu()

@@ -88,6 +88,35 @@ def test_account_switch_when_flat():
     assert str(settings.account_id()) == "67890"
 
 
+def test_cancel_closes_menu():
+    _reset()
+    text, rows = tgcontrol._route("opt:close", "12345")
+    assert "Closed" in text and rows == []                # empty rows -> keyboard removed
+
+
+def test_submenus_have_cancel():
+    _reset()
+    for data in ("opt:risk", "opt:mode"):
+        _, rows = tgcontrol._route(data, "12345")
+        flat = [b["callback_data"] for row in rows for b in row]
+        assert "opt:close" in flat and "opt:menu" in flat   # both Cancel + Back present
+
+
+def test_back_clears_pending():
+    _reset()
+    tgcontrol._route("set:risk:custom", "12345")
+    assert "12345" in tgcontrol._pending
+    tgcontrol._route("opt:menu", "12345")
+    assert "12345" not in tgcontrol._pending               # back cancels the custom prompt
+
+
+def test_help_matches_menu():
+    _reset()
+    txt = tgcontrol.cmd_help()
+    for cmd, _ in tgcontrol.COMMAND_MENU:
+        assert f"/{cmd}" in txt                            # /help lists exactly the menu
+
+
 def test_command_menu_is_valid():
     import re
     cmds = [c[0] for c in tgcontrol.COMMAND_MENU]
