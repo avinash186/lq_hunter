@@ -43,6 +43,8 @@ VARIANTS = [
     {"name": "1.5S/3T +BE@1",       "stop": ("atr", 1.5), "tp": ("atr", 3.0), "be": 1.0},
     {"name": "LQ-tp + 1.5S",        "stop": ("atr", 1.5), "tp": ("level", None)},
     {"name": "LQ-tp + LQ-stop",     "stop": ("level", None), "tp": ("level", None)},
+    {"name": "LQ-tp + 1.0S",        "stop": ("atr", 1.0), "tp": ("level", None)},   # tight stop = small losses
+    {"name": "tight 1.5S/1.0T",     "stop": ("atr", 1.5), "tp": ("atr", 1.0)},      # closer TP = higher win%
 ]
 
 
@@ -101,8 +103,8 @@ def run(symbol):
     bk = brackets.build(df, tick=config.TICK_SIZE.get(symbol, 0.25))
     a = bk["a"].to_numpy(); b = bk["b"].to_numpy()
     hi = df["high"].to_numpy(); lo = df["low"].to_numpy(); cl = df["close"].to_numpy()
-    yrs = df.index.year.to_numpy()
-    pos = {int(t): i for i, t in enumerate(_epoch(df.index))}
+    ep = _epoch(df.index)
+    pos = {int(t): i for i, t in enumerate(ep)}
     n = len(df)
 
     sig = signals.load(symbol); sig = sig[sig["fire"]].sort_values("ts")
@@ -110,7 +112,7 @@ def run(symbol):
 
     out = {}
     for spec in VARIANTS:
-        Rs, ys, busy = [], [], -1
+        Rs, Ts, busy = [], [], -1
         for i, side in fires:
             if i <= busy or i + 1 >= n:
                 continue
@@ -121,8 +123,8 @@ def run(symbol):
             above = np.nanmax([a[i], b[i]]); below = np.nanmin([a[i], b[i]])
             R, off = replay(side, cl[i], ai, above, below,
                             hi[i + 1:j + 1], lo[i + 1:j + 1], cl[i + 1:j + 1], spec)
-            Rs.append(R); ys.append(yrs[i]); busy = i + 1 + off
-        out[spec["name"]] = (np.array(Rs), np.array(ys))
+            Rs.append(R); Ts.append(int(ep[i])); busy = i + 1 + off
+        out[spec["name"]] = (np.array(Rs), np.array(Ts, dtype=np.int64))
     return out
 
 
