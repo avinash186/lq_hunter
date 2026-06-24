@@ -41,6 +41,30 @@ ORDER MANAGEMENT: SL or TP only (whichever hits first) — NO breakeven, NO trai
 the trade label simple and matches the validated exit engine.
 
 --------------------------------------------------------------------------------
+## TRAIN/LIVE PARITY + ISOLATION (HARD REQUIREMENTS)
+--------------------------------------------------------------------------------
+PARITY (label -> training data -> recreated live):
+- ONE shared feature module computes EVERY model input IDENTICALLY in training (over
+  historical bars at labeled entries) and live (rolling window at the current bar) — no
+  parallel code path (defends train/serve skew). Mirrors score.live_score recomputing the
+  dataset features live today.
+- ALL model inputs are MACHINE-computed as-of-t; the live model needs NO human annotation.
+  Annotations either (a) define the LABEL only, or (b) train AUTO-DETECTORS (e.g. a
+  "key-level" scorer from the user's picks) that reproduce the human selection autonomously.
+- Store the annotation set + data-snapshot hash with the model. A PARITY TEST (train-
+  computed features == live-computed features at sample bars) MUST pass before activation.
+ISOLATION (must NOT impact existing live models) — NON-NEGOTIABLE:
+- Additive only: new modules (annotation store, lab encoders, lab trainer, registry). NO
+  changes to existing score/live/exit logic except ONE backward-compatible "load active
+  model" hook.
+- ACTIVE model DEFAULTS to the current production model (data/models/); lab models are
+  inactive until explicitly promoted. No registry/active set => behavior byte-for-byte
+  identical to today.
+- Branch isolation: all work on model-lab; main is the safe baseline (revert = checkout main).
+- A REGRESSION CHECK confirms the existing model's signals/trades are unchanged after the
+  lab code lands.
+
+--------------------------------------------------------------------------------
 ## MANUAL ANNOTATION FEATURES (tools) + IMPLEMENTATION + AS-OF-T FEATURE
 --------------------------------------------------------------------------------
 1. TRADE (long/short position) — drag entry/TP/SL; exit = first of SL/TP (NO breakeven,
