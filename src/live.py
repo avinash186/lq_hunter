@@ -24,7 +24,7 @@ import time
 import pandas as pd
 
 import config
-from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify
+from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify, execution
 
 log = logging.getLogger("live")
 NY = "America/New_York"
@@ -150,6 +150,19 @@ class LiveEngine:
                 self.states[s].contract = topstep.front_contract(s)
             except Exception:
                 log.exception("live: contract lookup failed for %s", s)
+        if config.EXECUTE_BROKER:                         # broker truth before we trade
+            try:
+                execution.reconcile_startup()
+                execution.start_user_hub()
+            except Exception:
+                log.exception("live: broker execution boot failed (continuing)")
+        if notify.configured():                           # /kill failsafe + /status, /resume
+            handlers = {"kill": self._cmd_kill, "flat": self._cmd_kill,
+                        "resume": self._cmd_resume, "status": self._cmd_status}
+            self._cmd_stop = threading.Event()
+            threading.Thread(target=notify.poll_commands, args=(handlers,),
+                             kwargs={"stop": self._cmd_stop}, name="tg-commands",
+                             daemon=True).start()
         threading.Thread(target=self._connect_loop, name="live-feed", daemon=True).start()
         threading.Thread(target=self._minute_loop, name="live-minute", daemon=True).start()
         threading.Thread(target=self._flush_loop, name="live-flush", daemon=True).start()
@@ -351,6 +364,8 @@ class LiveEngine:
             return
         if self._trade.get(symbol) is not None or not res.get("fire"):
             return                                            # in a trade -> discard fire
+        if config.EXECUTE_BROKER and execution.is_halted():   # /kill failsafe blocks entries
+            return
         em = _et(bar["start"]); m = em.hour * 60 + em.minute
         if trades.CUT_MIN <= m < trades.RESUME_MIN:           # no entries 16:10 -> 18:00
             return
@@ -367,6 +382,10 @@ class LiveEngine:
         d = "LONG" if tr["side"] == 1 else "SHORT"
         notify.send(f"📈 {symbol} {d} @ {br['entry']:.2f}\nTP {br['tp']:.2f}   SL {br['sl']:.2f}   "
                     f"R:R {br['rr']:.2f}\n{br['contracts']} MNQ   risk ${br['risk_usd']:.0f}")
+        try:                                                  # route to broker (dry-run if off)
+            execution.submit(symbol, tr)
+        except Exception:
+            log.exception("live: broker submit failed for %s", symbol)
 
     def _check_exit(self, symbol, price, ts):
         tr = self._trade.get(symbol)
@@ -405,6 +424,29 @@ class LiveEngine:
         self.broadcast({"e": "trade_close", "sym": symbol, **rec})
         emo = "✅" if R > 0 else "❌"
         notify.send(f"{emo} {symbol} {outcome.upper()}   R {R:+.2f}   P&L ${rec['pnl_usd']:+.0f}")
+
+    # ───────────── Telegram commands (/kill failsafe) ─────────────
+    def _cmd_kill(self):
+        s = execution.flatten_all()
+        for sym in self.symbols:
+            self._trade[sym] = None
+        return (f"⛔ KILL — cancelled {s['cancelled']} order(s), closed {s['closed']} position(s)."
+                + (f" errors: {s['errors']}" if s['errors'] else "")
+                + " Entries HALTED — send /resume to re-enable.")
+
+    def _cmd_resume(self):
+        execution.resume()
+        return "✅ Entries resumed."
+
+    def _cmd_status(self):
+        if not config.EXECUTE_BROKER:
+            return "Execution is OFF (dry-run). Signals are logged, no orders sent."
+        try:
+            pos = topstep.search_open_positions(config.TOPSTEP_ACCOUNT_ID)
+            n = sum(1 for p in pos if (p.get("size") or 0) != 0)
+            return f"Broker: {n} open position(s) · halted={execution.is_halted()}"
+        except Exception as exc:                          # noqa: BLE001
+            return f"status error: {exc}"
 
     def _register_levels(self, symbol, bar):
         dt = _et(bar["start"])

@@ -57,3 +57,11 @@ EXEC_POINT_VALUE = {"NQ": 2.0, "ES": 5.0}
 # Symbols actually TRADED live (open trades + Telegram alerts). NQ only — ES is too
 # weak / overfit-prone (docs/research_exit_strategy.md). Others are still scored/charted.
 TRADE_SYMBOLS = [s.strip().upper() for s in os.getenv("TRADE_SYMBOLS", "NQ").split(",") if s.strip()]
+
+# ── Broker execution (Topstep / ProjectX) ──
+# OFF by default: when off, a fired signal is DRY-RUN (the exact OCO bracket payload is
+# logged + alerted, NO order is sent). Set EXECUTE_BROKER=1 in .env to send real orders.
+# Topstep TOS: the bot must run on your PERSONAL DEVICE — no VPS/VPN/remote servers.
+EXECUTE_BROKER = os.getenv("EXECUTE_BROKER", "0").strip().lower() not in ("0", "false", "no", "")
+# Micro execution contracts the model's E-mini signals are routed to (NQ->MNQ, ES->MES).
+EXEC_CONTRACT_ROOT = {"NQ": "CON.F.US.MNQ.", "ES": "CON.F.US.MES."}
