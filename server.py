@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
-from src import data_loader, fetcher, liquidity, live, signals
+from src import data_loader, fetcher, liquidity, live, signals, trades
 
 app = FastAPI(title="lgbm-trader")
 app.add_middleware(GZipMiddleware, minimum_size=1024)   # compress bar payloads
@@ -255,6 +255,24 @@ def scores(symbol: str, frm: int | None = Query(None, alias="from"),
     out = [{"time": int(r.ts), "p_up": float(r.p_up), "side": int(r.side), "fire": bool(r.fire)}
            for r in df.itertuples()]
     return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol)})
+
+
+@app.get("/api/trades/{symbol}")
+def trade_list(symbol: str, frm: int | None = Query(None, alias="from"),
+               to: int | None = Query(None)):
+    """One-position-at-a-time trades (liquidity-level exit + MNQ sizing) overlapping
+    [from, to]. Each: {entry_ts, exit_ts, side, entry, tp, sl, sl_pts, contracts,
+    risk_usd, R, pnl_usd, outcome}. The chart draws position boxes + an equity curve."""
+    symbol = symbol.upper()
+    if symbol not in config.SYMBOLS:
+        return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
+    t = trades.load(symbol, frm, to)
+    out = [{"entry_ts": int(r.entry_ts), "exit_ts": int(r.exit_ts), "side": int(r.side),
+            "entry": float(r.entry), "tp": float(r.tp), "sl": float(r.sl),
+            "sl_pts": float(r.sl_pts), "contracts": int(r.contracts),
+            "risk_usd": float(r.risk_usd), "R": float(r.R), "pnl_usd": float(r.pnl_usd),
+            "outcome": str(r.outcome)} for r in t.itertuples()]
+    return JSONResponse({"symbol": symbol, "trades": out})
 
 
 _GATE: dict = {}
