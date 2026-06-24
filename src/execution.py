@@ -127,7 +127,7 @@ def submit(symbol: str, signal: dict) -> dict:
             _submitted_tags.add(tag)
             log.info("execution[DRY]: would place %s", payload)
             notify.send(f"🧪 DRY {symbol} {'LONG' if signal['side']==1 else 'SHORT'} "
-                        f"{contracts}x  SL {sl_ticks}t / TP {tp_ticks}t  tag {tag}")
+                        f"{contracts}x  SL {signal['sl_pts']:.1f} pt / TP {signal['tp_pts']:.1f} pt  tag {tag}")
             return {"action": "dry_run", "payload": payload}
 
         # LIVE
@@ -150,11 +150,18 @@ def submit(symbol: str, signal: dict) -> dict:
             resp = topstep.place_bracket_order(_acct(), cid, signal["side"], contracts,
                                                sl_ticks, tp_ticks, custom_tag=tag)
             _submitted_tags.add(tag)
+            # ProjectX returns HTTP 200 even on a logical REJECTION — check success.
+            if isinstance(resp, dict) and not resp.get("success", True):
+                reason = resp.get("errorMessage") or f"errorCode {resp.get('errorCode')}"
+                _st(symbol).update(status=FLAT)
+                log.error("execution: order REJECTED %s: %s", symbol, reason)
+                notify.send(f"⛔ {symbol} order REJECTED: {reason}")
+                return {"action": "rejected", "reason": reason}
             oid = resp.get("orderId") if isinstance(resp, dict) else None
             _st(symbol).update(status=OPEN, order_id=oid)
             log.info("execution: placed %s %sx %s tag=%s orderId=%s", symbol, contracts, cid, tag, oid)
             notify.send(f"✅ {symbol} {'LONG' if signal['side']==1 else 'SHORT'} {contracts}x "
-                        f"placed (SL {sl_ticks}t / TP {tp_ticks}t) order {oid}")
+                        f"placed (SL {signal['sl_pts']:.1f} pt / TP {signal['tp_pts']:.1f} pt) order {oid}")
             return {"action": "placed", "order_id": oid, "tag": tag}
         except Exception as e:                          # noqa: BLE001 — timeout/network
             # DANGER ZONE: the order MAY have landed. Reconcile; never blind-resubmit.

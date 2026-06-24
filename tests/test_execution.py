@@ -37,11 +37,32 @@ def test_side_mapping_and_payload():
     p = topstep.build_order_payload("12345", "CON.X", side=1, size=2,
                                     sl_ticks=300, tp_ticks=244, custom_tag="NQ-1")
     assert p["type"] == 2 and p["side"] == 0 and p["size"] == 2      # long -> buy(0), market(2)
-    assert p["stopLossBracket"] == {"ticks": 300, "type": 4}
-    assert p["takeProfitBracket"] == {"ticks": 244, "type": 1}
+    assert p["stopLossBracket"] == {"ticks": -300, "type": 4}        # long stop BELOW -> negative
+    assert p["takeProfitBracket"] == {"ticks": 244, "type": 1}       # long target ABOVE -> positive
     assert p["customTag"] == "NQ-1"
     short = topstep.build_order_payload("12345", "CON.X", side=0, size=1, sl_ticks=10, tp_ticks=10, custom_tag=None)
     assert short["side"] == 1 and "customTag" not in short           # short -> sell(1)
+
+
+def test_bracket_ticks_signed_by_side():
+    """The exact ProjectX-rejection fix: bracket ticks are SIGNED by direction."""
+    lng = topstep.build_order_payload("1", "C", side=1, size=1, sl_ticks=300, tp_ticks=374, custom_tag=None)
+    assert lng["stopLossBracket"]["ticks"] == -300            # long SL below (was +300 -> rejected)
+    assert lng["takeProfitBracket"]["ticks"] == 374           # long TP above
+    sht = topstep.build_order_payload("1", "C", side=0, size=1, sl_ticks=300, tp_ticks=374, custom_tag=None)
+    assert sht["stopLossBracket"]["ticks"] == 300             # short SL above
+    assert sht["takeProfitBracket"]["ticks"] == -374          # short TP below
+
+
+def test_rejected_order_is_not_marked_open():
+    _reset(execute=True)
+    placed = []
+    _mock_live(placed)
+    topstep.place_bracket_order = lambda *a, **k: {"success": False,
+                                                   "errorMessage": "Invalid stop loss ticks (300)."}
+    r = execution.submit("NQ", SIG)
+    assert r["action"] == "rejected" and "Invalid stop loss" in r["reason"]
+    assert execution.status("NQ") == execution.FLAT          # NOT left falsely OPEN
 
 
 def test_custom_tag_deterministic():
@@ -56,7 +77,7 @@ def test_dry_run_sends_no_order():
     topstep.place_bracket_order = lambda *a, **k: sent.append(1)     # must NOT be called
     r = execution.submit("NQ", SIG)
     assert r["action"] == "dry_run" and not sent
-    assert r["payload"]["size"] == 2 and r["payload"]["stopLossBracket"]["ticks"] == 300
+    assert r["payload"]["size"] == 2 and r["payload"]["stopLossBracket"]["ticks"] == -300  # long SL signed
 
 
 def test_dedupe_same_signal():
