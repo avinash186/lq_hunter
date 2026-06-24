@@ -738,7 +738,38 @@
       l.oninput = function () { TRADES.lossOp = +this.value; $('cx-tr-lossop-val').textContent = TRADES.lossOp + '%'; saveTrades(); redrawLevels(); }; }
   }
   // ─────────────── equity curve (separate chart below) ───────────────
-  var eqChart = null, eqSeries = null, eqUnit = 'usd', eqTrades = [];
+  var eqChart = null, eqSeries = null, eqTrades = [];
+  var EQ = (function () {
+    var d = { unit: 'usd', start: null, snap: false };
+    var s = JSON.parse(localStorage.getItem('cxeq') || 'null');
+    if (s) { if (s.unit) d.unit = s.unit; if (s.start != null) d.start = s.start; d.snap = !!s.snap; }
+    return d;
+  })();
+  function saveEq() { localStorage.setItem('cxeq', JSON.stringify(EQ)); }
+  function applyEqSnap() {
+    if (!eqChart || !EQ.snap || !chart) return;
+    try { var r = chart.timeScale().getVisibleRange(); if (r) eqChart.timeScale().setVisibleRange(r); } catch (e) {}
+  }
+  function wireEq() {
+    document.querySelectorAll('.cx-eq-unit').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-unit') === EQ.unit);
+      b.onclick = function () { EQ.unit = b.getAttribute('data-unit'); saveEq();
+        document.querySelectorAll('.cx-eq-unit').forEach(function (x) { x.classList.toggle('active', x === b); }); renderEquity(); };
+    });
+    var df = $('cx-eq-from');
+    if (df) {
+      if (EQ.start) df.value = new Date(EQ.start * 1000).toISOString().slice(0, 10);
+      df.onchange = function () { EQ.start = this.value ? Math.floor(Date.parse(this.value + 'T00:00:00Z') / 1000) : null; saveEq(); renderEquity(); };
+    }
+    var all = $('cx-eq-all');
+    if (all) all.onclick = function () { EQ.start = null; if (df) df.value = ''; saveEq(); renderEquity(); };
+    var snap = $('cx-eq-snap');
+    if (snap) {
+      snap.classList.toggle('active', EQ.snap);
+      snap.onclick = function () { EQ.snap = !EQ.snap; saveEq(); snap.classList.toggle('active', EQ.snap);
+        if (EQ.snap) applyEqSnap(); else if (eqChart) eqChart.timeScale().fitContent(); };
+    }
+  }
   function initEquity() {
     var el = $('cx-equity-chart'); if (!el || !window.LightweightCharts || eqChart) return;
     var light = S.theme === 'light';
@@ -753,9 +784,8 @@
     eqSeries = eqChart.addAreaSeries({ lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
     applyEqColors();
     new ResizeObserver(function () { if (eqChart) eqChart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); }).observe(el);
-    document.querySelectorAll('.cx-eq-unit').forEach(function (b) {
-      b.onclick = function () { eqUnit = b.getAttribute('data-unit'); document.querySelectorAll('.cx-eq-unit').forEach(function (x) { x.classList.toggle('active', x === b); }); renderEquity(); };
-    });
+    chart.timeScale().subscribeVisibleTimeRangeChange(function () { if (EQ.snap) applyEqSnap(); });
+    wireEq();
   }
   function applyEqColors() {
     if (eqSeries) eqSeries.applyOptions({ lineColor: S.up, topColor: hexToRgba(S.up, 0.28), bottomColor: hexToRgba(S.up, 0.02) });
@@ -767,9 +797,11 @@
   }
   function renderEquity() {
     if (!eqSeries) return;
-    var cum = 0, data = [], wins = 0, peak = 0, dd = 0, lastT = 0, usd = eqUnit === 'usd';
+    var cum = 0, data = [], wins = 0, n = 0, peak = 0, dd = 0, lastT = 0, usd = EQ.unit === 'usd';
     for (var i = 0; i < eqTrades.length; i++) {
       var t = eqTrades[i];
+      if (EQ.start && t.exit_ts < EQ.start) continue;     // track from the chosen date, rebased to 0
+      n++;
       cum += usd ? t.pnl_usd : t.R;
       var tm = t.exit_ts; if (tm <= lastT) tm = lastT + 1; lastT = tm;   // strictly increasing for LWC
       data.push({ time: tm, value: +cum.toFixed(usd ? 2 : 3) });
@@ -778,8 +810,8 @@
       if (cum - peak < dd) dd = cum - peak;
     }
     eqSeries.setData(data); applyEqColors();
-    if (data.length) eqChart.timeScale().fitContent();
-    var n = eqTrades.length, p = usd ? '$' : '';
+    if (data.length) { if (EQ.snap) applyEqSnap(); else eqChart.timeScale().fitContent(); }
+    var p = usd ? '$' : '';
     $('cx-eq-stat').textContent = n
       ? n + ' trades · win ' + (100 * wins / n).toFixed(1) + '% · total ' + p + (usd ? cum.toFixed(0) : cum.toFixed(1))
         + ' · maxDD ' + p + (usd ? dd.toFixed(0) : dd.toFixed(1))

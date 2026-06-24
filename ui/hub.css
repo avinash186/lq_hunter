@@ -432,7 +432,11 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 .cx-eq-head{display:flex;align-items:center;gap:12px;padding:8px 12px;border-bottom:1px solid var(--b1);background:var(--s2)}
 .cx-eq-title{font-size:12px;font-weight:700;color:var(--t1)}
 .cx-eq-stat{font-size:11px;color:var(--t2);font-variant-numeric:tabular-nums}
-.cx-eq-units{margin-left:auto;display:flex;gap:3px}
+.cx-eq-ctrls{margin-left:auto;display:flex;align-items:center;gap:7px}
+.cx-eq-date{background:var(--s1);border:1px solid var(--b1);color:var(--t2);border-radius:5px;padding:2px 6px;font-size:11px;font-family:inherit;color-scheme:dark}
+.cx-eq-btn{background:var(--s1);border:1px solid var(--b1);color:var(--t3);border-radius:5px;padding:2px 9px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit}
+.cx-eq-btn.active{background:var(--ad);color:var(--accent);border-color:var(--am)}
+.cx-eq-units{display:flex;gap:3px}
 .cx-eq-unit{background:var(--s1);border:1px solid var(--b1);color:var(--t3);border-radius:5px;padding:2px 9px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit}
 .cx-eq-unit.active{background:var(--ad);color:var(--accent);border-color:var(--am)}
 #cx-equity-chart{flex:1;min-height:0}
