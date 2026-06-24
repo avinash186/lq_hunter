@@ -90,6 +90,11 @@ def live_score(symbol: str, df: pd.DataFrame, partner_pos: float = 0.0) -> dict:
     risk = np.array([float(dataset.DIR_K * tech["atr_fast"].iloc[-1])])
     sc = score(feat, risk, np.array([sid]))
     pos = geo["pos_in_bracket"].iloc[-1]
+    a, b = bk["a"].iloc[-1], bk["b"].iloc[-1]              # nearest levels for the exit bracket
+    above, below = np.fmax(a, b), np.fmin(a, b)
     return {"p_up": float(sc["p_up"].iloc[0]), "p_conf": float(sc["p_conf"].iloc[0]),
             "side": int(sc["side"].iloc[0]), "fire": bool(sc["fire"].iloc[0]),
-            "pos_in_bracket": float(pos) if pos == pos else 0.0}
+            "pos_in_bracket": float(pos) if pos == pos else 0.0,
+            "atr": float(tech["atr_fast"].iloc[-1]),
+            "above": float(above) if above == above else float("nan"),
+            "below": float(below) if below == below else float("nan")}

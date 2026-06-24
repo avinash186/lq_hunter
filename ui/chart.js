@@ -478,6 +478,15 @@
       scheduleMid();
     } else if (ev.e === 'reconciled') { scheduleLvFetch(); scheduleMid(); }
     else if (ev.e === 'model_score') applyScore(ev);
+    else if (ev.e === 'trade_open') { liveTrade = ev; redrawLevels(); }
+    else if (ev.e === 'trade_close') {
+      liveTrade = null;
+      if (TRADES.variant === 'lq') {            // the live engine trades the LQ exit
+        tradesData.push(ev); eqTrades.push(ev); renderEquity();
+      }
+      redrawLevels();
+    }
+    if (liveTrade && ev.e === 'bar_close') redrawLevels();   // extend the open box each bar
   }
   function applyLiveBar(ev) {
     var b = ev.bar;
@@ -657,6 +666,7 @@
   })();
   function saveTrades() { localStorage.setItem('cxtrades', JSON.stringify(TRADES)); scheduleServerSave(); }
   var tradesData = [], tradesCache = { key: null, from: 0, to: 0 }, tradesReq = 0, tradesFetchT = 0;
+  var liveTrade = null;                         // the open trade (drawn extending live)
   function scheduleTradesFetch() { clearTimeout(tradesFetchT); tradesFetchT = setTimeout(maybeFetchTrades, 300); }
   function maybeFetchTrades() {
     if (!TRADES.on || S.tf !== '1m' || !bars.length || !candle) {
@@ -678,7 +688,7 @@
     }).catch(function () {});
   }
   function drawTrades(ctx, rightX) {
-    if (!TRADES.on || S.tf !== '1m' || !tradesData.length || !candle) return;
+    if (!TRADES.on || S.tf !== '1m' || !candle || (!tradesData.length && !liveTrade)) return;
     var win = TRADES.winOp / 100, loss = TRADES.lossOp / 100;
     for (var i = 0; i < tradesData.length; i++) {
       var t = tradesData[i];
@@ -696,6 +706,18 @@
       ctx.beginPath(); ctx.moveTo(x1, ye); ctx.lineTo(x2, ye); ctx.stroke();
       ctx.strokeStyle = hexToRgba('#8892a4', 0.35);
       ctx.strokeRect(x1, Math.min(yt, ys), w, Math.abs(ys - yt));
+    }
+    if (liveTrade) {                            // the open trade — box extends to the latest bar
+      var lt = liveTrade, lx1 = timeToX(lt.entry_ts);
+      var lx2 = bars.length ? timeToX(bars[bars.length - 1].time) : null;
+      var le = priceToY(lt.entry), ltp = priceToY(lt.tp), lsl = priceToY(lt.sl);
+      if (lx1 != null && lx2 != null && le != null && ltp != null && lsl != null) {
+        var lw = Math.max(2, lx2 - lx1);
+        ctx.fillStyle = hexToRgba(S.up, win); ctx.fillRect(lx1, Math.min(le, ltp), lw, Math.abs(ltp - le));
+        ctx.fillStyle = hexToRgba(S.down, loss); ctx.fillRect(lx1, Math.min(le, lsl), lw, Math.abs(lsl - le));
+        ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.strokeStyle = hexToRgba('#00d2ff', 0.95);
+        ctx.strokeRect(lx1, Math.min(ltp, lsl), lw, Math.abs(lsl - ltp)); ctx.setLineDash([]);
+      }
     }
   }
   function wireTrades() {

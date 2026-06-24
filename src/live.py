@@ -24,7 +24,7 @@ import time
 import pandas as pd
 
 import config
-from src import data_loader, fetcher, liquidity, topstep, score, signals
+from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify
 
 log = logging.getLogger("live")
 NY = "America/New_York"
@@ -122,6 +122,7 @@ class LiveEngine:
         self.states = {s: SymbolState(s) for s in self.symbols}
         self._last_pos = {}              # latest pos_in_bracket per symbol (for SMT partner)
         self._score_window = 180_000     # ~125 days of 1m bars for live feature recompute
+        self._trade = {s: None for s in self.symbols}    # open trade per symbol (one at a time)
         self.hub = None
         self._stop = False
         self._opened = False
@@ -287,6 +288,11 @@ class LiveEngine:
             f["high"] = max(f["high"], price); f["low"] = min(f["low"], price)
             f["close"] = price; f["volume"] += volume
         self._check_sweeps(symbol, price, ts)
+        if self._trade.get(symbol) is not None:
+            try:
+                self._check_exit(symbol, price, ts)
+            except Exception:
+                log.exception("live: trade exit check failed for %s", symbol)
         self.broadcast({"e": "tick", "sym": symbol,
                         "bar": {"time": f["start"], "open": f["open"], "high": f["high"],
                                 "low": f["low"], "close": f["close"], "volume": f["volume"]}})
@@ -334,6 +340,69 @@ class LiveEngine:
                         "p_up": round(res["p_up"], 4), "side": res["side"], "fire": res["fire"]})
         signals.append(symbol, {"ts": bar["start"], "p_up": res["p_up"],
                                 "p_conf": res["p_conf"], "side": res["side"], "fire": res["fire"]})
+        try:
+            self._manage_entry(symbol, bar, res)
+        except Exception:
+            log.exception("live: trade entry failed for %s", symbol)
+
+    # ───────────── trade engine (one position at a time) ─────────────
+    def _manage_entry(self, symbol, bar, res):
+        if self._trade.get(symbol) is not None or not res.get("fire"):
+            return                                            # in a trade -> discard fire
+        em = _et(bar["start"]); m = em.hour * 60 + em.minute
+        if trades.CUT_MIN <= m < trades.RESUME_MIN:           # no entries 16:10 -> 18:00
+            return
+        atr = res.get("atr")
+        if not atr or atr != atr or atr <= 0:
+            return
+        br = trades.bracket_and_size(symbol, bar["close"], atr, res.get("above", float("nan")),
+                                     res.get("below", float("nan")), int(res["side"]), "lq")
+        tr = {"entry_ts": int(bar["start"]), "side": int(res["side"]), **br}
+        self._trade[symbol] = tr
+        self.broadcast({"e": "trade_open", "sym": symbol, "entry_ts": tr["entry_ts"], "side": tr["side"],
+                        "entry": br["entry"], "tp": br["tp"], "sl": br["sl"],
+                        "contracts": br["contracts"], "risk_usd": br["risk_usd"], "rr": br["rr"]})
+        d = "LONG" if tr["side"] == 1 else "SHORT"
+        notify.send(f"📈 {symbol} {d} @ {br['entry']:.2f}\nTP {br['tp']:.2f}   SL {br['sl']:.2f}   "
+                    f"R:R {br['rr']:.2f}\n{br['contracts']} MNQ   risk ${br['risk_usd']:.0f}")
+
+    def _check_exit(self, symbol, price, ts):
+        tr = self._trade.get(symbol)
+        if tr is None:
+            return
+        side = tr["side"]; out = xp = None
+        if side == 1:
+            if price <= tr["sl"]:   out, xp = "sl", tr["sl"]
+            elif price >= tr["tp"]: out, xp = "tp", tr["tp"]
+        else:
+            if price >= tr["sl"]:   out, xp = "sl", tr["sl"]
+            elif price <= tr["tp"]: out, xp = "tp", tr["tp"]
+        if out is None:
+            em = _et(ts); m = em.hour * 60 + em.minute
+            if trades.CUT_MIN <= m < trades.RESUME_MIN:       # 16:10 session flat
+                out, xp = "eod", price
+        if out:
+            self._close_trade(symbol, ts, out, xp)
+
+    def _close_trade(self, symbol, ts, outcome, xp):
+        tr = self._trade.get(symbol)
+        if tr is None:
+            return
+        sgn = 1.0 if tr["side"] == 1 else -1.0
+        tick = self.tick.get(symbol, 0.25)
+        R = sgn * (xp - tr["entry"]) / tr["sl_pts"] - trades.COST_TICKS * tick / tr["sl_pts"]
+        rec = {"entry_ts": int(tr["entry_ts"]), "exit_ts": int(ts), "side": int(tr["side"]),
+               "entry": tr["entry"], "tp": tr["tp"], "sl": tr["sl"], "sl_pts": tr["sl_pts"],
+               "contracts": tr["contracts"], "risk_usd": tr["risk_usd"], "R": float(R),
+               "pnl_usd": float(R * tr["risk_usd"]), "outcome": outcome}
+        self._trade[symbol] = None
+        try:
+            trades.append(symbol, rec, "lq")
+        except Exception:
+            log.exception("live: trade append failed")
+        self.broadcast({"e": "trade_close", "sym": symbol, **rec})
+        emo = "✅" if R > 0 else "❌"
+        notify.send(f"{emo} {symbol} {outcome.upper()}   R {R:+.2f}   P&L ${rec['pnl_usd']:+.0f}")
 
     def _register_levels(self, symbol, bar):
         dt = _et(bar["start"])

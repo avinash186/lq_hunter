@@ -45,6 +45,23 @@ def path(symbol, variant="lq"):
     return TR_DIR / f"trades_{symbol.lower()}_{variant}.parquet"
 
 
+def path_live(symbol, variant="lq"):     # live trades closed this session (append-only)
+    return TR_DIR / f"trades_{symbol.lower()}_{variant}_live.parquet"
+
+
+def append(symbol, rec, variant="lq"):
+    """Append one closed live trade to the live file (dedup on entry_ts, newest wins)."""
+    TR_DIR.mkdir(exist_ok=True)
+    p = path_live(symbol, variant)
+    new = pd.DataFrame([rec]).astype(_COLS)
+    if p.exists():
+        old = pd.read_parquet(p)
+        out = pd.concat([old[old["entry_ts"] != rec["entry_ts"]], new], ignore_index=True)
+    else:
+        out = new
+    out.sort_values("entry_ts").to_parquet(p, index=False)
+
+
 def bracket_and_size(symbol, entry, atr, above, below, side, variant="lq"):
     """TP/SL prices + dynamic micro sizing for one fire (pure; live + backtest share it).
     contracts = floor(MAX_RISK/(sl_pts·pv)) >= 1; sl capped at MAX_RISK/pv pts so 1 fits."""
@@ -144,10 +161,11 @@ def precompute(symbols=("NQ", "ES")):
 
 
 def load(symbol, variant="lq", frm=None, to=None):
-    p = path(symbol, variant if variant in VARIANTS else "lq")
-    if not p.exists():
+    v = variant if variant in VARIANTS else "lq"
+    parts = [pd.read_parquet(p) for p in (path(symbol, v), path_live(symbol, v)) if p.exists()]
+    if not parts:
         return pd.DataFrame(columns=list(_COLS))
-    t = pd.read_parquet(p)
+    t = pd.concat(parts, ignore_index=True).drop_duplicates("entry_ts", keep="last")
     if frm is not None:
         t = t[t["exit_ts"] >= int(frm)]
     if to is not None:
