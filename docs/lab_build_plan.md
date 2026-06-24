@@ -27,13 +27,25 @@ research_lab.md (registry/guardrails) + research_exit_strategy.md (exit layer re
 4. TRANSFER / SMALL-N: build the setup-classifier ON TOP of the existing direction+meta
    model (transfer), not from scratch.
 5. The in-sample/labeled curve is shown but flagged UNVALIDATED until trained + holdout.
+6. CONTEXT WINDOWS for every label. The model gets not just the entry-bar snapshot but a
+   LOOKBACK WINDOW of context around each labeled trade: each annotation's state/age and
+   its SIGNED distance-to-price TRAJECTORY over the window (approaching vs moving away),
+   plus windowed price/vol summaries. Keep the windowed feature set CURATED (not a kitchen
+   sink) — small labeled N + many features = overfitting; lean on regularization, transfer,
+   and the forward holdout.
+7. SIGNED NORMALIZED DISTANCE to every labeled object is a core feature family:
+   (level - close)/ATR -> magnitude + above/below sign, for each labeled FVG edge, level,
+   EQH/EQL, trendline (at the current bar), IB hi/lo, and SMT pivot. Stationary + directional.
+
+ORDER MANAGEMENT: SL or TP only (whichever hits first) — NO breakeven, NO trailing. Keeps
+the trade label simple and matches the validated exit engine.
 
 --------------------------------------------------------------------------------
 ## MANUAL ANNOTATION FEATURES (tools) + IMPLEMENTATION + AS-OF-T FEATURE
 --------------------------------------------------------------------------------
-1. TRADE (long/short position) — drag entry/TP/SL; management = static | breakeven@X |
-   trailing(type,mult). Impl: interactive editable position box (extends current box
-   drawing). Stores the trade record (entry/exit intent, TP/SL, mgmt). This is the LABEL.
+1. TRADE (long/short position) — drag entry/TP/SL; exit = first of SL/TP (NO breakeven,
+   NO trailing). Impl: interactive editable position box (extends current box drawing).
+   Stores the trade record (entry, TP, SL). This is the LABEL.
 2. SMT DIVERGENCE (cross-asset; ES leg REQUIRED) — NQ/ES side-by-side; user marks 2 NQ
    pivots AND the 2 corresponding ES pivots; the label is invalid until the ES leg is
    drawn. Stores {nq_p1,nq_p2, es_p1,es_p2, kind}. As-of-t feature: SMT metric (one index
