@@ -63,16 +63,16 @@
           <button class="cx-sym" data-sym="ES">ES</button>
         </div>
         <div class="cx-sep"></div>
-        <div class="cx-tfs">
-          <button class="cx-tf active" data-tf="1m">1m</button>
-          <button class="cx-tf" data-tf="2m">2m</button>
-          <button class="cx-tf" data-tf="3m">3m</button>
-          <button class="cx-tf" data-tf="5m">5m</button>
-          <button class="cx-tf" data-tf="15m">15m</button>
-          <button class="cx-tf" data-tf="1h">1h</button>
-          <button class="cx-tf" data-tf="1d">1d</button>
-          <button class="cx-tf" data-tf="1w">1w</button>
-        </div>
+        <select class="cx-tf-sel" id="cx-tf-sel" title="Bar interval">
+          <option value="1m">1m</option>
+          <option value="2m">2m</option>
+          <option value="3m">3m</option>
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="1h">1h</option>
+          <option value="1d">1d</option>
+          <option value="1w">1w</option>
+        </select>
         <div class="cx-tools">
           <button class="cx-tool active" id="cx-levels-btn" title="Liquidity levels">Liq</button>
           <button class="cx-tool active" id="cx-sig-toggle" title="Model signals (Stage-1 score)">Sig</button>
