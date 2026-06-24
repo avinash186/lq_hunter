@@ -415,7 +415,7 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 /* ════════════ TradingView-style chart page ════════════ */
 #page-chart{padding:0}
 #page-chart.active{display:flex;flex-direction:column}
-#page-chart:fullscreen,#page-chart:-webkit-full-screen{height:100vh;width:100vw;padding:10px;background:var(--bg)}
+#page-chart:fullscreen,#page-chart:-webkit-full-screen{height:100vh;width:100vw;padding:10px;background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch}
 .cx-toolbar{display:flex;align-items:center;gap:12px;padding:7px 10px;border:1px solid var(--b1);border-radius:var(--r);background:var(--s2);margin-bottom:10px;flex-wrap:wrap}
 .cx-syms,.cx-tfs,.cx-tools{display:flex;gap:4px;align-items:center}
 .cx-tools{margin-left:auto}
@@ -425,6 +425,16 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 .cx-sym.active,.cx-tf.active,.cx-tool.active{background:var(--ad);color:var(--accent);border-color:var(--am)}
 .cx-tool{padding:5px 9px}
 .cx-model-sel{background:var(--s1);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:4px 6px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer}
+.cx-tf-sel{background:var(--s1);border:1px solid var(--b1);color:var(--t1);border-radius:6px;padding:5px 8px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer}
+/* Short viewports (landscape phones): shrink the chart so the signal pane fits + the page can scroll */
+@media (max-height:560px){
+  .cx-host{height:calc(100dvh - var(--th) - 64px);min-height:240px}
+  .cx-equity{height:230px}
+}
+@media (max-width:920px){
+  #content{padding:14px}
+  .cx-toolbar{gap:8px;padding:6px 8px}
+}
 
 .cx-host{flex:0 0 auto;height:calc(100vh - var(--th) - 92px);min-height:420px;position:relative;border:1px solid var(--b1);border-radius:var(--r);overflow:hidden;background:var(--bg)}
 /* equity curve — separate chart below the main chart (scroll down to see) */

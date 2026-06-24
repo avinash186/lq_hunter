@@ -395,7 +395,7 @@
   }
   function syncControls() {
     setActive('.cx-sym', 'data-sym', S.sym);
-    setActive('.cx-tf', 'data-tf', S.tf);
+    var tfSel = $('cx-tf-sel'); if (tfSel) tfSel.value = S.tf;
     $('cx-vol-toggle').classList.toggle('active', S.volOn);
     $('cx-up').value = S.up; $('cx-down').value = S.down;
     $('cx-vol-check').checked = S.volOn;
@@ -406,9 +406,7 @@
     document.querySelectorAll('.cx-sym').forEach(function (b) {
       b.onclick = function () { S.sym = b.getAttribute('data-sym'); saveNow(); syncControls(); load(); };
     });
-    document.querySelectorAll('.cx-tf').forEach(function (b) {
-      b.onclick = function () { S.tf = b.getAttribute('data-tf'); saveNow(); syncControls(); load(); };
-    });
+    $('cx-tf-sel').onchange = function () { S.tf = this.value; saveNow(); syncControls(); load(); };
     $('cx-fit').onclick = function () { chart.timeScale().fitContent(); };
     $('cx-latest').onclick = function () { chart.timeScale().scrollToRealTime(); };
     $('cx-fullscreen').onclick = function () {
