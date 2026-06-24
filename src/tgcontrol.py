@@ -141,7 +141,8 @@ def cmd_status(chat_id=None) -> str:
     if settings.execute_broker():
         try:
             n = sum(1 for p in topstep.search_open_positions(settings.account_id()) if (p.get("size") or 0) != 0)
-            s += f"\nBroker open: {n}"
+            o = len(topstep.search_open_orders(settings.account_id()))
+            s += f"\nBroker: {n} position(s), {o} working order(s)"
         except Exception:                # noqa: BLE001
             pass
     return s

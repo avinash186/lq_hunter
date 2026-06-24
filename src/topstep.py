@@ -158,15 +158,24 @@ def points_to_ticks(symbol: str, points: float) -> int:
 
 def build_order_payload(account_id, contract_id: str, side: int, size: int,
                         sl_ticks: int, tp_ticks: int, custom_tag: str | None) -> dict:
-    """Pure builder for a MARKET entry + OCO bracket (TICK offsets). Testable."""
+    """Pure builder for a MARKET entry + OCO bracket. Testable.
+
+    ProjectX bracket ``ticks`` are SIGNED offsets from the entry fill: for a LONG the stop
+    sits BELOW (negative ticks) and the target ABOVE (positive); for a SHORT the reverse.
+    Callers pass positive magnitudes (sl_ticks/tp_ticks); we apply the sign by side. Sending
+    unsigned ticks is rejected by ProjectX ("Ticks should be less than zero when longing")."""
+    long = int(side) == 1
+    sl_mag, tp_mag = abs(int(sl_ticks)), abs(int(tp_ticks))
+    sl_signed = -sl_mag if long else sl_mag        # stop: below for long, above for short
+    tp_signed = tp_mag if long else -tp_mag        # target: above for long, below for short
     body: dict = {"accountId": int(account_id), "contractId": contract_id,
                   "type": OT_MARKET, "side": _broker_side(side), "size": int(size)}
     if custom_tag:
         body["customTag"] = str(custom_tag)
-    if sl_ticks and sl_ticks > 0:
-        body["stopLossBracket"] = {"ticks": int(sl_ticks), "type": OT_STOP}
-    if tp_ticks and tp_ticks > 0:
-        body["takeProfitBracket"] = {"ticks": int(tp_ticks), "type": OT_LIMIT}
+    if sl_mag > 0:
+        body["stopLossBracket"] = {"ticks": sl_signed, "type": OT_STOP}
+    if tp_mag > 0:
+        body["takeProfitBracket"] = {"ticks": tp_signed, "type": OT_LIMIT}
     return body
 
 
