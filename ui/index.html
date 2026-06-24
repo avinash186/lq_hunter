@@ -28,6 +28,10 @@
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
       Datasets
     </div>
+    <div class="nav-item" data-page="lab" onclick="nav(this); window.lab && lab.open()">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3h6M10 3v6l-4.5 8a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L14 9V3"/></svg>
+      Lab
+    </div>
   </div>
   <div class="sb-footer">
     <div class="feed-dot" id="feed-dot"></div>
@@ -190,6 +194,29 @@
       </table></div></div>
     </div>
 
+    <!-- ── LAB ── -->
+    <div class="page" id="page-lab">
+      <div class="ph"><div class="ph-left">
+        <div class="ph-title">Model Lab</div>
+        <div class="ph-sub">Create models by labeling setups; compare and activate trained models</div>
+      </div></div>
+      <div class="lab-tabs">
+        <button class="lab-tab active" data-lab="models" onclick="lab.tab(this)">Models</button>
+        <button class="lab-tab" data-lab="labeling" onclick="lab.tab(this)">Labeling</button>
+      </div>
+      <div class="lab-pane active" id="lab-models">
+        <div class="card"><div class="tbl-wrap"><table class="dt">
+          <thead><tr><th>Model</th><th>Status</th><th>Win% IS / OOS</th><th>PF IS / OOS</th><th>Sharpe IS / OOS</th><th>maxDD R IS / OOS</th><th>DSR</th><th>IS−OOS gap</th><th>$ OOS</th><th></th></tr></thead>
+          <tbody id="lab-models-body"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+        </table></div></div>
+      </div>
+      <div class="lab-pane" id="lab-labeling">
+        <div class="card"><div class="card-body">
+          <p style="line-height:1.6">The <strong>labeling workspace</strong> (NQ/ES side-by-side annotation of trades + SMT, multi-timeframe FVG, liquidity, IB legs, etc., then train) is the next build. The <strong>Models</strong> tab is live now: it lists trained models with honest <strong>in-sample vs out-of-sample</strong> stats + Deflated Sharpe, flags likely overfit, and lets you set the active model. The production model is shown as a baseline.</p>
+        </div></div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -197,5 +224,6 @@
 <script src="/ui/vendor/lightweight-charts.js"></script>
 <script src="/ui/app.js"></script>
 <script src="/ui/chart.js"></script>
+<script src="/ui/lab.js"></script>
 </body>
 </html>

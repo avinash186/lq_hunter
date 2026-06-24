@@ -425,6 +425,17 @@ table.dt tbody tr.clickable:hover td{background:var(--s3);color:var(--t1)}
 .cx-sym.active,.cx-tf.active,.cx-tool.active{background:var(--ad);color:var(--accent);border-color:var(--am)}
 .cx-tool{padding:5px 9px}
 .cx-model-sel{background:var(--s1);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:4px 6px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer}
+/* Model Lab */
+td.c-red,.c-red{color:var(--red)}
+td.c-green,.c-green{color:var(--green)}
+.lab-tabs{display:flex;gap:6px;margin-bottom:14px}
+.lab-tab{background:var(--s2);border:1px solid var(--b1);color:var(--t2);border-radius:8px;padding:7px 16px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit;transition:all .12s}
+.lab-tab:hover{color:var(--t1);border-color:var(--b2)}
+.lab-tab.active{background:var(--ad);color:var(--accent);border-color:var(--am)}
+.lab-pane{display:none}
+.lab-pane.active{display:block}
+.lab-badge{display:inline-block;background:var(--ad);color:var(--accent);border:1px solid var(--am);border-radius:5px;padding:2px 8px;font-size:11px;font-weight:700}
+.lab-active-row{background:rgba(0,210,255,.05)}
 
 .cx-host{flex:0 0 auto;height:calc(100vh - var(--th) - 92px);min-height:420px;position:relative;border:1px solid var(--b1);border-radius:var(--r);overflow:hidden;background:var(--bg)}
 /* equity curve — separate chart below the main chart (scroll down to see) */

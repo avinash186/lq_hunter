@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
-from src import data_loader, fetcher, liquidity, live, signals, trades
+from src import data_loader, fetcher, liquidity, live, signals, trades, registry
 
 app = FastAPI(title="lgbm-trader")
 app.add_middleware(GZipMiddleware, minimum_size=1024)   # compress bar payloads
@@ -255,6 +255,55 @@ def scores(symbol: str, frm: int | None = Query(None, alias="from"),
     out = [{"time": int(r.ts), "p_up": float(r.p_up), "side": int(r.side), "fire": bool(r.fire)}
            for r in df.itertuples()]
     return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol)})
+
+
+def _model_stats(name: str) -> dict:
+    """In-sample + OOS metrics for a model from its trades store (production = NQ/lq),
+    incl. Deflated Sharpe and the IS-OOS win gap (an overfit tell). n_trials reflects the
+    exit-variant search."""
+    from src import metrics
+    res: dict = {}
+    for oos in (False, True):
+        t = trades.load("NQ", "lq", oos=oos)
+        if t.empty:
+            continue
+        r = t["R"].to_numpy()
+        fin = metrics.financial(r, t["entry_ts"].to_numpy())
+        sk = float(pd.Series(r).skew()) if len(r) > 2 else 0.0
+        ku = float(pd.Series(r).kurt() + 3) if len(r) > 2 else 3.0
+        dsr = metrics.deflated_sharpe(fin.get("sharpe_per_trade", float("nan")), 11, len(r), sk, ku)
+        res["oos" if oos else "is"] = {
+            "trades": fin["trades"], "win": fin["win_rate"], "pf": fin["profit_factor"],
+            "sharpe": fin.get("sharpe_annual"), "maxdd_R": fin["max_drawdown_R"],
+            "total_usd": float(t["pnl_usd"].sum()), "dsr": dsr}
+    if "is" in res and "oos" in res:
+        res["is_oos_gap"] = res["is"]["win"] - res["oos"]["win"]
+    return res
+
+
+@app.get("/api/models")
+def models_list():
+    """Registry models for the Lab Models page. Each: manifest fields + active flag +
+    metrics (from the manifest if trained in the lab, else computed from the trades store
+    for the production model)."""
+    out = []
+    for m in registry.list_models():
+        if "metrics" not in m:
+            try:
+                m["metrics"] = _model_stats(m["name"])
+            except Exception:
+                m["metrics"] = {}
+        out.append(m)
+    return JSONResponse({"models": out, "active": registry.active_name()})
+
+
+@app.post("/api/models/{name}/activate")
+def models_activate(name: str):
+    try:
+        registry.set_active(name)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"active": registry.active_name()})
 
 
 @app.get("/api/trades/{symbol}")
