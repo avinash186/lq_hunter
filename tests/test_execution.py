@@ -9,7 +9,7 @@ position-close handling, flatten_all (kill switch), and Telegram command parsing
 from __future__ import annotations
 
 import config
-from src import topstep, execution, notify
+from src import topstep, execution, notify, settings
 
 
 def _reset(execute=False):
@@ -17,9 +17,9 @@ def _reset(execute=False):
     execution._contracts.clear()
     execution._submitted_tags.clear()
     execution._halted = False
-    config.EXECUTE_BROKER = execute
-    config.TOPSTEP_ACCOUNT_ID = "12345"
-    notify.send = lambda *a, **k: True          # silence alerts
+    settings._data = {"max_risk_per_trade": 150.0, "execute_broker": execute,
+                      "account_id": "12345"}          # in-memory; never touches the real file
+    notify.send = lambda *a, **k: True               # silence alerts
 
 
 SIG = {"entry_ts": 1700000000, "side": 1, "entry": 20000.0, "tp": 20061.0,

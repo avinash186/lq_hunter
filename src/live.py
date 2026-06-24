@@ -24,7 +24,7 @@ import time
 import pandas as pd
 
 import config
-from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify, execution
+from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify, execution, settings, tgcontrol
 
 log = logging.getLogger("live")
 NY = "America/New_York"
@@ -150,19 +150,27 @@ class LiveEngine:
                 self.states[s].contract = topstep.front_contract(s)
             except Exception:
                 log.exception("live: contract lookup failed for %s", s)
-        if config.EXECUTE_BROKER:                         # broker truth before we trade
+        if settings.execute_broker():                         # broker truth before we trade
             try:
                 execution.reconcile_startup()
                 execution.start_user_hub()
             except Exception:
                 log.exception("live: broker execution boot failed (continuing)")
-        if notify.configured():                           # /kill failsafe + /status, /resume
+        self._mkt_open = _market_open()                   # session-card transition tracker
+        if notify.configured():                           # Telegram control surface
             handlers = {"kill": self._cmd_kill, "flat": self._cmd_kill,
-                        "resume": self._cmd_resume, "status": self._cmd_status}
+                        "resume": self._cmd_resume, "status": tgcontrol.cmd_status,
+                        "list": tgcontrol.cmd_list, "opt": tgcontrol.cmd_opt,
+                        "help": tgcontrol.cmd_help}
             self._cmd_stop = threading.Event()
             threading.Thread(target=notify.poll_commands, args=(handlers,),
-                             kwargs={"stop": self._cmd_stop}, name="tg-commands",
-                             daemon=True).start()
+                             kwargs={"on_callback": tgcontrol.on_callback,
+                                     "on_text": tgcontrol.on_text, "stop": self._cmd_stop},
+                             name="tg-commands", daemon=True).start()
+            try:
+                notify.send("🤖 Bot live\n\n" + tgcontrol.settings_summary())
+            except Exception:
+                log.exception("live: startup card failed")
         threading.Thread(target=self._connect_loop, name="live-feed", daemon=True).start()
         threading.Thread(target=self._minute_loop, name="live-minute", daemon=True).start()
         threading.Thread(target=self._flush_loop, name="live-flush", daemon=True).start()
@@ -364,7 +372,7 @@ class LiveEngine:
             return
         if self._trade.get(symbol) is not None or not res.get("fire"):
             return                                            # in a trade -> discard fire
-        if config.EXECUTE_BROKER and execution.is_halted():   # /kill failsafe blocks entries
+        if settings.execute_broker() and execution.is_halted():   # /kill failsafe blocks entries
             return
         em = _et(bar["start"]); m = em.hour * 60 + em.minute
         if trades.CUT_MIN <= m < trades.RESUME_MIN:           # no entries 16:10 -> 18:00
@@ -373,7 +381,8 @@ class LiveEngine:
         if not atr or atr != atr or atr <= 0:
             return
         br = trades.bracket_and_size(symbol, bar["close"], atr, res.get("above", float("nan")),
-                                     res.get("below", float("nan")), int(res["side"]), "lq")
+                                     res.get("below", float("nan")), int(res["side"]), "lq",
+                                     max_risk=settings.max_risk())
         tr = {"entry_ts": int(bar["start"]), "side": int(res["side"]), **br}
         self._trade[symbol] = tr
         self.broadcast({"e": "trade_open", "sym": symbol, "entry_ts": tr["entry_ts"], "side": tr["side"],
@@ -426,7 +435,7 @@ class LiveEngine:
         notify.send(f"{emo} {symbol} {outcome.upper()}   R {R:+.2f}   P&L ${rec['pnl_usd']:+.0f}")
 
     # ───────────── Telegram commands (/kill failsafe) ─────────────
-    def _cmd_kill(self):
+    def _cmd_kill(self, chat_id=None):
         s = execution.flatten_all()
         for sym in self.symbols:
             self._trade[sym] = None
@@ -434,19 +443,16 @@ class LiveEngine:
                 + (f" errors: {s['errors']}" if s['errors'] else "")
                 + " Entries HALTED — send /resume to re-enable.")
 
-    def _cmd_resume(self):
+    def _cmd_resume(self, chat_id=None):
         execution.resume()
         return "✅ Entries resumed."
 
-    def _cmd_status(self):
-        if not config.EXECUTE_BROKER:
-            return "Execution is OFF (dry-run). Signals are logged, no orders sent."
-        try:
-            pos = topstep.search_open_positions(config.TOPSTEP_ACCOUNT_ID)
-            n = sum(1 for p in pos if (p.get("size") or 0) != 0)
-            return f"Broker: {n} open position(s) · halted={execution.is_halted()}"
-        except Exception as exc:                          # noqa: BLE001
-            return f"status error: {exc}"
+    def _session_card(self):
+        """Send the status card once when the session transitions closed -> open."""
+        now = _market_open()
+        if now and not getattr(self, "_mkt_open", True) and notify.configured():
+            notify.send("🔔 Market open — bot live\n\n" + tgcontrol.settings_summary())
+        self._mkt_open = now
 
     def _register_levels(self, symbol, bar):
         dt = _et(bar["start"])
@@ -479,6 +485,10 @@ class LiveEngine:
                 self._reconcile()
             except Exception:
                 log.exception("live: reconcile failed")
+            try:
+                self._session_card()
+            except Exception:
+                log.exception("live: session card failed")
 
     def _reconcile(self):
         # Pull the last few official bars (no disk write); correct provisional
