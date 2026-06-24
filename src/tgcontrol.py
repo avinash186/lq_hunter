@@ -4,6 +4,7 @@ notify.poll_commands). Model switching degrades gracefully where the registry is
 """
 from __future__ import annotations
 
+import html
 import logging
 
 import config
@@ -25,7 +26,7 @@ COMMAND_MENU = [
     ("kill", "Flatten all & halt entries"),
     ("flat", "Flatten all & halt (alias of /kill)"),
     ("resume", "Re-enable entries"),
-    ("stop", "Stop the public UI link"),
+    ("stop", "Emergency: switch execution to DRY"),
     ("help", "Show all commands"),
 ]
 _pending: dict[str, str] = {}            # chat_id -> awaited input key
@@ -146,7 +147,10 @@ def cmd_status(chat_id=None) -> str:
     return s
 
 
-def cmd_list(chat_id=None) -> str:
+def cmd_list(chat_id=None):
+    """Active accounts. The connected one is flagged 🟢; every id is rendered as a
+    tap-to-copy <code> entity (HTML). Sends directly so it can use parse_mode; returns
+    the text only when no chat_id (tests)."""
     try:
         accts = topstep.search_accounts()
     except Exception as e:               # noqa: BLE001
@@ -154,13 +158,35 @@ def cmd_list(chat_id=None) -> str:
     if not accts:
         return "No active accounts."
     cur = str(settings.account_id())
-    lines = []
+    lines = [f"🔌 <b>Connected account</b> (tap to copy):\n<code>{html.escape(cur)}</code>\n",
+             "<b>Topstep accounts</b>"]
     for a in accts:
-        mark = "  ← connected" if str(a.get("id")) == cur else ""
+        aid = str(a.get("id"))
+        name = html.escape(str(a.get("name", "")))
         bal = a.get("balance")
-        bal_s = f"  ${bal:,.0f}" if isinstance(bal, (int, float)) else ""
-        lines.append(f"{a.get('id')} · {a.get('name', '')}{bal_s}{mark}")
-    return "Topstep accounts:\n" + "\n".join(lines)
+        bal_s = f" · ${bal:,.0f}" if isinstance(bal, (int, float)) else ""
+        if aid == cur:
+            lines.append(f"🟢 <code>{html.escape(aid)}</code> · {name}{bal_s}  ← connected")
+        else:
+            lines.append(f"⚪ <code>{html.escape(aid)}</code> · {name}{bal_s}")
+    text = "\n".join(lines)
+    if chat_id:
+        notify.send_to(chat_id, text, parse_mode="HTML")
+        return None
+    return text
+
+
+def cmd_stop(chat_id=None) -> str:
+    """Emergency one-tap: switch execution to DRY (stop sending broker orders). Refuses
+    while a position is open — flatten with /kill first or wait for it to close."""
+    if not settings.execute_broker():
+        return "🧪 Already DRY — no orders are being sent."
+    if _position_open():
+        return ("⚠️ A position is open — can't switch to DRY.\n"
+                "Use /kill to flatten + halt, or wait for it to close, then /stop.")
+    settings.set("execute_broker", False)
+    return ("🧪 Execution switched to DRY. New signals are logged, not sent.\n"
+            "Re-arm via /opt → Mode → Live when ready.")
 
 
 def cmd_opt(chat_id) -> None:

@@ -161,10 +161,10 @@ class LiveEngine:
             handlers = {"kill": self._cmd_kill, "flat": self._cmd_kill,
                         "resume": self._cmd_resume, "status": tgcontrol.cmd_status,
                         "list": tgcontrol.cmd_list, "opt": tgcontrol.cmd_opt,
-                        "help": tgcontrol.cmd_help}
-            try:                                          # /hub /fetch /stop -> the same poller
+                        "stop": tgcontrol.cmd_stop, "help": tgcontrol.cmd_help}
+            try:                                          # /hub /fetch -> the same poller
                 import bot
-                handlers.update({"hub": bot.cmd_hub, "fetch": bot.cmd_fetch, "stop": bot.cmd_stop})
+                handlers.update({"hub": bot.cmd_hub, "fetch": bot.cmd_fetch})
             except Exception:
                 log.exception("live: hub commands unavailable (continuing)")
             self._cmd_stop = threading.Event()

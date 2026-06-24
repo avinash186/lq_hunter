@@ -23,10 +23,9 @@ def test_hub_handlers_exist_and_return_strings():
     notify.send = lambda *a, **k: True
     notify.send_to = lambda *a, **k: True
     bot.HUB.restart = lambda: "https://abc123.trycloudflare.com"
-    bot.HUB.stop = lambda: None
     assert "trycloudflare" in bot.cmd_hub()
-    assert bot.cmd_stop().startswith("🛑")
     assert isinstance(bot.hub_status(), str)
+    assert not hasattr(bot, "cmd_stop")              # /stop is repurposed (now switches to DRY)
 
 
 def test_fetch_handler(monkeypatch=None):
