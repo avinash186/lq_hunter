@@ -151,6 +151,13 @@ def poll_commands(handlers: dict, *, on_callback=None, on_text=None,
             if offset is not None:
                 params["offset"] = offset
             r = requests.get(url, params=params, timeout=long_poll + 15)
+            if r.status_code == 409:        # another getUpdates poller on this token
+                log.error("telegram getUpdates 409 CONFLICT — another bot instance is "
+                          "polling this token. Run only ONE (stale process / multi-worker "
+                          "server). Duplicate replies come from that other instance.")
+                if stop:
+                    stop.wait(5)
+                continue
             for upd in (r.json().get("result", []) if r.ok else []):
                 offset = upd["update_id"] + 1
                 if "callback_query" in upd:
