@@ -57,11 +57,13 @@ def lq_R(df, atr, a, b, tick):
         mS = (lk <= tps) & (ftpS == T + 1); ftpS[mS] = k
         mS = (hk >= sls) & (fslS == T + 1); fslS[mS] = k
     end = np.clip(idx + T, 0, n - 1)
-    # long outcome (pessimistic: stop wins ties => sl<=tp is a loss)
+    # outcome in RISK units (pessimistic: stop wins ties). A win pays the TP distance
+    # / stop distance (NOT 1:1 — the LQ target is usually nearer than the stop); a loss
+    # is -1R; a timeout exits at close.
     R_long = np.where(fslL <= np.minimum(ftpL, T), -1.0,
-             np.where(ftpL <= T, 1.0, (cl[end] - e) / rl)) - cost_px / rl
+             np.where(ftpL <= T, (tpl - e) / rl, (cl[end] - e) / rl)) - cost_px / rl
     R_short = np.where(fslS <= np.minimum(ftpS, T), -1.0,
-              np.where(ftpS <= T, 1.0, (e - cl[end]) / rs)) - cost_px / rs
+              np.where(ftpS <= T, (e - tps) / rs, (e - cl[end]) / rs)) - cost_px / rs
     rbL = np.minimum.reduce([ftpL, fslL, np.full(n, T)])
     rbS = np.minimum.reduce([ftpS, fslS, np.full(n, T)])
     return R_long, R_short, rbL, rbS
