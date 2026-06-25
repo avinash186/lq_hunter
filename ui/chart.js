@@ -193,6 +193,8 @@
     wireTrades();
     initEquity();
     chart.subscribeCrosshairMove(function (param) {
+      crossY = (param && param.point) ? param.point.y : null;   // track cursor y for countdown
+      tickCountdown();                                          // keep crosshair readout on top
       var b;
       if (param && param.time) {
         var c = param.seriesData.get(candle), v = param.seriesData.get(volume);
@@ -362,6 +364,7 @@
   function priceToY(p) { return candle.priceToCoordinate(p); }
 
   // ── bar countdown: seconds to next candle, pinned at the live price (right) ──
+  var crossY = null;                     // latest crosshair y (px); null when not hovering
   var TFSEC = { '1m': 60, '2m': 120, '3m': 180, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400, '1w': 604800 };
   function etNaiveSeconds() {            // current ET wall-clock as epoch secs (matches bar times)
     var ps = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false,
@@ -383,6 +386,9 @@
     var secs = TFSEC[S.tf] || 60;
     var y = priceToY(last.close);
     if (y == null) { el.style.display = 'none'; return; }
+    // crosshair price readout must sit on top: hide the countdown while the cursor hovers
+    // the live-price / countdown band on the right axis.
+    if (crossY != null && crossY > y - 12 && crossY < y + 34) { el.style.display = 'none'; return; }
     el.textContent = fmtDur((last.time + secs) - etNaiveSeconds());
     el.style.background = last.close >= last.open ? S.up : S.down;  // match price tag (bar color)
     el.style.display = 'block';                     // explicit (CSS default is none)
