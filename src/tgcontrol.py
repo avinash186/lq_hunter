@@ -20,6 +20,7 @@ RISK_PRESETS = (100, 130, 150, 200)
 COMMAND_MENU = [
     ("opt", "View & edit settings"),
     ("status", "Live status + hub link"),
+    ("health", "Feed / position / broker health"),
     ("list", "Topstep accounts"),
     ("hub", "Restart the public UI link"),
     ("fetch", "Pull latest NQ & ES bars"),

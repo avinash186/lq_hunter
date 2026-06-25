@@ -66,8 +66,14 @@ async function load() {
     return;
   }
 
-  document.getElementById('feed-dot').classList.toggle('on', !!s.ok);
-  document.getElementById('feed-label').textContent = s.ok ? 'API online' : 'API';
+  var feed = s.feed || {};
+  var stale = !!(feed.market_open && feed.up === false);   // session open but no recent data
+  var fdot = document.getElementById('feed-dot');
+  fdot.classList.toggle('on', !!s.ok && !stale);
+  fdot.classList.toggle('warn', stale);
+  var flabel = s.ok ? 'API online' : 'API';
+  if (feed.market_open) flabel = (stale ? 'Feed stale' : 'Live feed') + (feed.age != null ? ' ' + feed.age + 's' : '');
+  document.getElementById('feed-label').textContent = flabel;
   document.getElementById('ts-dot').classList.toggle('on', !!s.topstep_configured);
   document.getElementById('tg-dot').classList.toggle('on', !!s.telegram_configured);
 
