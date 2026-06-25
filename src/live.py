@@ -390,17 +390,27 @@ class LiveEngine:
                                      res.get("below", float("nan")), int(res["side"]), "lq",
                                      max_risk=settings.max_risk())
         tr = {"entry_ts": int(bar["start"]), "side": int(res["side"]), **br}
+        d = "LONG" if tr["side"] == 1 else "SHORT"
+        notify.send(f"📈 {symbol} {d} @ {br['entry']:.2f}\nTP {br['tp']:.2f}   SL {br['sl']:.2f}   "
+                    f"R:R {br['rr']:.2f}\n{br['contracts']} MNQ   risk ${br['risk_usd']:.0f}")
+        # Route to the broker; in LIVE mode only open the local (paper/UI) trade if the broker
+        # actually took it — so the sim can never desync into a phantom trade. In DRY mode the
+        # paper trade always opens (execution.submit sends the 🧪 alert).
+        opened = not settings.execute_broker()
+        try:
+            r = execution.submit(symbol, tr)
+            if settings.execute_broker():
+                opened = r.get("action") in ("placed", "adopted_after_error")
+        except Exception:
+            log.exception("live: broker submit failed for %s", symbol)
+            notify.send(f"⚠️ {symbol} broker submit error — see logs; no paper trade opened.")
+            opened = not settings.execute_broker()
+        if not opened:
+            return                                            # broker didn't take it -> no phantom
         self._trade[symbol] = tr
         self.broadcast({"e": "trade_open", "sym": symbol, "entry_ts": tr["entry_ts"], "side": tr["side"],
                         "entry": br["entry"], "tp": br["tp"], "sl": br["sl"],
                         "contracts": br["contracts"], "risk_usd": br["risk_usd"], "rr": br["rr"]})
-        d = "LONG" if tr["side"] == 1 else "SHORT"
-        notify.send(f"📈 {symbol} {d} @ {br['entry']:.2f}\nTP {br['tp']:.2f}   SL {br['sl']:.2f}   "
-                    f"R:R {br['rr']:.2f}\n{br['contracts']} MNQ   risk ${br['risk_usd']:.0f}")
-        try:                                                  # route to broker (dry-run if off)
-            execution.submit(symbol, tr)
-        except Exception:
-            log.exception("live: broker submit failed for %s", symbol)
 
     def _check_exit(self, symbol, price, ts):
         tr = self._trade.get(symbol)
@@ -491,6 +501,10 @@ class LiveEngine:
                 self._reconcile()
             except Exception:
                 log.exception("live: reconcile failed")
+            try:
+                execution.reconcile()                 # broker-truth state sync (self-heal)
+            except Exception:
+                log.exception("live: execution reconcile failed")
             try:
                 self._session_card()
             except Exception:
