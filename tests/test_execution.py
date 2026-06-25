@@ -8,6 +8,8 @@ position-close handling, flatten_all (kill switch), and Telegram command parsing
 """
 from __future__ import annotations
 
+import time
+
 import config
 from src import topstep, execution, notify, settings
 
@@ -108,6 +110,43 @@ def test_live_places_once():
     assert r["action"] == "placed" and r["order_id"] == 999
     assert placed == ["NQ-1700000000"]
     assert execution.status("NQ") == execution.OPEN
+
+
+def test_stale_open_self_heals_then_places():
+    # state stuck OPEN but the broker is flat -> reconcile-on-submit heals + places (fix 1)
+    _reset(execute=True)
+    placed = []
+    _mock_live(placed, positions=[])                       # broker flat
+    execution._state["NQ"] = {"status": execution.OPEN, "contract_id": "CON.F.US.MNQ.U26"}
+    r = execution.submit("NQ", SIG)
+    assert r["action"] == "placed" and placed == ["NQ-1700000000"]
+
+
+def test_busy_skips_only_when_broker_really_holds():
+    _reset(execute=True)
+    placed = []
+    _mock_live(placed, positions=[{"contractId": "CON.F.US.MNQ.U26", "size": 2}])
+    execution._state["NQ"] = {"status": execution.OPEN, "contract_id": "CON.F.US.MNQ.U26"}
+    r = execution.submit("NQ", SIG)
+    assert r["action"] == "skip" and r["reason"] == "busy_broker_position" and not placed
+
+
+def test_reconcile_resets_stale_open():
+    _reset(execute=True)
+    _mock_live([], positions=[])                           # broker flat
+    execution._state["NQ"] = {"status": execution.OPEN, "contract_id": "CON.F.US.MNQ.U26",
+                              "open_ts": time.time() - 100}  # past grace
+    execution.reconcile()
+    assert execution.status("NQ") == execution.FLAT
+
+
+def test_reconcile_respects_grace():
+    _reset(execute=True)
+    _mock_live([], positions=[])
+    execution._state["NQ"] = {"status": execution.OPEN, "contract_id": "CON.F.US.MNQ.U26",
+                              "open_ts": time.time()}        # fresh -> broker may lag
+    execution.reconcile()
+    assert execution.status("NQ") == execution.OPEN          # not reset within grace
 
 
 def test_no_submit_when_broker_position_exists():
