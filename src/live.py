@@ -129,6 +129,7 @@ class LiveEngine:
         self._disconnected = threading.Event()
         self._backoff = 5
         self._last_msg = 0.0
+        self._feed_alerted = False        # watchdog: have we alerted on a data-feed outage?
         self._lock = threading.RLock()
 
     # ───────────────────────── lifecycle ─────────────────────────
@@ -161,7 +162,8 @@ class LiveEngine:
             handlers = {"kill": self._cmd_kill, "flat": self._cmd_kill,
                         "resume": self._cmd_resume, "status": tgcontrol.cmd_status,
                         "list": tgcontrol.cmd_list, "opt": tgcontrol.cmd_opt,
-                        "stop": tgcontrol.cmd_stop, "help": tgcontrol.cmd_help}
+                        "stop": tgcontrol.cmd_stop, "health": self._cmd_health,
+                        "help": tgcontrol.cmd_help}
             try:                                          # /hub /fetch -> the same poller
                 import bot
                 handlers.update({"hub": bot.cmd_hub, "fetch": bot.cmd_fetch})
@@ -463,6 +465,48 @@ class LiveEngine:
         execution.resume()
         return "✅ Entries resumed."
 
+    def _feed_watchdog(self):
+        """Alert if the market-data feed goes silent during the session, and on recovery.
+        The connect loop already auto-reconnects at ~90s; this makes a real outage LOUD so
+        you know the bot has gone dark (it can't score bars or fire without data)."""
+        if not self._last_msg:
+            return                                        # not connected yet
+        if not _market_open():
+            self._feed_alerted = False
+            return
+        silent = time.time() - self._last_msg
+        if silent > 300 and not self._feed_alerted:
+            notify.send(f"⚠️ No market data for {int(silent)}s during the session — feed may be "
+                        f"down (auto-reconnecting). Check the bot if this persists.")
+            self._feed_alerted = True
+        elif silent < 90 and self._feed_alerted:
+            notify.send("✅ Market-data feed restored.")
+            self._feed_alerted = False
+
+    def _cmd_health(self, chat_id=None):
+        age = int(time.time() - self._last_msg) if self._last_msg else None
+        if age is None:
+            feed = "⚪ no data yet"
+        elif age < 120:
+            feed = f"🟢 live · last data {age}s ago"
+        elif _market_open():
+            feed = f"🔴 STALE · last data {age}s ago"
+        else:
+            feed = f"⏸️ market closed · last data {age}s ago"
+        lines = ["🩺 Health", f"Feed: {feed}"]
+        intrade = [s for s in self.symbols if self._trade.get(s) is not None]
+        lines.append("Position (sim): " + (", ".join(intrade) if intrade else "flat"))
+        if settings.execute_broker():
+            lines.append(f"Mode: 🟢 LIVE · halted={execution.is_halted()}")
+            try:
+                n = sum(1 for p in topstep.search_open_positions(settings.account_id()) if (p.get("size") or 0) != 0)
+                lines.append(f"Broker: {n} open position(s)")
+            except Exception as e:                        # noqa: BLE001
+                lines.append(f"Broker: ⚠️ {e}")
+        else:
+            lines.append("Mode: 🧪 DRY")
+        return "\n".join(lines)
+
     def _session_card(self):
         """Send the status card once when the session transitions closed -> open."""
         now = _market_open()
@@ -505,6 +549,10 @@ class LiveEngine:
                 execution.reconcile()                 # broker-truth state sync (self-heal)
             except Exception:
                 log.exception("live: execution reconcile failed")
+            try:
+                self._feed_watchdog()                 # alert if the data feed goes silent
+            except Exception:
+                log.exception("live: feed watchdog failed")
             try:
                 self._session_card()
             except Exception:

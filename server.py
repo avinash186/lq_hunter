@@ -114,7 +114,24 @@ def status():
         "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID),
         "topstep_configured": bool(config.TOPSTEP_API_KEY),
         "datasets": datasets,
+        "feed": _feed_block(),
     })
+
+
+def _feed_block() -> dict:
+    """Live-engine health for the UI badge: data-feed age, session, trade/mode state."""
+    eng = _engine
+    if eng is None:
+        return {"up": False, "age": None, "market_open": False}
+    import time as _t
+    from src import live as _live, execution as _exec, settings as _set
+    age = int(_t.time() - eng._last_msg) if getattr(eng, "_last_msg", 0) else None
+    mkt = _live._market_open()
+    up = (age is not None) and (age < 120 or not mkt)
+    return {"up": bool(up), "age": age, "market_open": bool(mkt),
+            "in_trade": [s for s in eng.symbols if eng._trade.get(s) is not None],
+            "mode": "live" if _set.execute_broker() else "dry",
+            "halted": _exec.is_halted()}
 
 
 @app.post("/api/fetch")

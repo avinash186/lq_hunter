@@ -137,7 +137,7 @@ def test_every_menu_command_is_wired():
     handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help", "stop")})
     handlers.update({c: getattr(bot, "cmd_" + c) for c in ("hub", "fetch")})
     handlers.update({"kill": live.LiveEngine._cmd_kill, "flat": live.LiveEngine._cmd_kill,
-                     "resume": live.LiveEngine._cmd_resume})
+                     "resume": live.LiveEngine._cmd_resume, "health": live.LiveEngine._cmd_health})
     missing = menu - set(handlers)
     assert not missing, f"menu commands with NO handler: {missing}"
     for c, fn in handlers.items():
