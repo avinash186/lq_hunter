@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import config
 from src import topstep, notify, settings
@@ -25,6 +26,7 @@ from src import topstep, notify, settings
 log = logging.getLogger(__name__)
 
 FLAT, SUBMITTING, OPEN, CLOSING = "flat", "submitting", "open", "closing"
+_FILL_GRACE = 45          # sec before reconcile may reset a stale OPEN (broker-lag guard)
 
 _lock = threading.RLock()
 _state: dict[str, dict] = {}          # symbol -> {status, custom_tag, order_id, contract_id, signal}
@@ -108,12 +110,11 @@ def submit(symbol: str, signal: dict) -> dict:
     symbol = symbol.upper()
     with _lock:
         if _halted:
+            notify.send(f"⏭️ {symbol} entry skipped — execution HALTED (/resume to re-enable).")
             return {"action": "skip", "reason": "halted"}
         tag = custom_tag(symbol, signal["entry_ts"])
         if tag in _submitted_tags:
             return {"action": "skip", "reason": "duplicate_tag", "tag": tag}
-        if _st(symbol)["status"] != FLAT:
-            return {"action": "skip", "reason": f"busy:{_st(symbol)['status']}"}
 
         sl_ticks = topstep.points_to_ticks(symbol, signal["sl_pts"])
         tp_ticks = topstep.points_to_ticks(symbol, signal["tp_pts"])
@@ -130,7 +131,7 @@ def submit(symbol: str, signal: dict) -> dict:
                         f"{contracts}x  SL {signal['sl_pts']:.1f} pt / TP {signal['tp_pts']:.1f} pt  tag {tag}")
             return {"action": "dry_run", "payload": payload}
 
-        # LIVE
+        # LIVE — resolve the micro contract
         try:
             cid = resolve_contract(symbol)
         except Exception as e:                          # noqa: BLE001
@@ -138,10 +139,20 @@ def submit(symbol: str, signal: dict) -> dict:
             notify.send(f"⚠️ {symbol} order ABORTED — contract resolve failed: {e}")
             return {"action": "error", "reason": "contract"}
 
-        # pre-submit reconcile: never stack on an existing broker position
-        if _broker_has_position(cid):
-            _st(symbol).update(status=OPEN, contract_id=cid, custom_tag=tag)
+        # Reconcile against BROKER TRUTH before deciding (one searchOpen): self-heal a stale
+        # OPEN so we never silently skip, and never stack on a real position.
+        has_pos = _broker_has_position(cid)
+        if _st(symbol)["status"] != FLAT:
+            if has_pos:
+                notify.send(f"⏭️ {symbol} entry skipped — already holding a broker position.")
+                return {"action": "skip", "reason": "busy_broker_position"}
+            log.warning("execution: %s state was %s but broker is flat — self-healing to FLAT",
+                        symbol, _st(symbol)["status"])
+            _st(symbol)["status"] = FLAT
+        elif has_pos:                                   # we think flat but broker holds it
+            _st(symbol).update(status=OPEN, contract_id=cid, custom_tag=tag, open_ts=time.time())
             _submitted_tags.add(tag)
+            notify.send(f"⏭️ {symbol} entry skipped — broker already in a position (adopted).")
             return {"action": "skip", "reason": "broker_position_exists"}
 
         _st(symbol).update(status=SUBMITTING, contract_id=cid, custom_tag=tag,
@@ -158,7 +169,7 @@ def submit(symbol: str, signal: dict) -> dict:
                 notify.send(f"⛔ {symbol} order REJECTED: {reason}")
                 return {"action": "rejected", "reason": reason}
             oid = resp.get("orderId") if isinstance(resp, dict) else None
-            _st(symbol).update(status=OPEN, order_id=oid)
+            _st(symbol).update(status=OPEN, order_id=oid, open_ts=time.time())
             log.info("execution: placed %s %sx %s tag=%s orderId=%s", symbol, contracts, cid, tag, oid)
             notify.send(f"✅ {symbol} {'LONG' if signal['side']==1 else 'SHORT'} {contracts}x "
                         f"placed (SL {signal['sl_pts']:.1f} pt / TP {signal['tp_pts']:.1f} pt) order {oid}")
@@ -168,7 +179,7 @@ def submit(symbol: str, signal: dict) -> dict:
             landed = _tag_live_on_broker(tag, cid)
             if landed:
                 _submitted_tags.add(tag)
-                _st(symbol).update(status=OPEN)
+                _st(symbol).update(status=OPEN, open_ts=time.time())
                 notify.send(f"⚠️ {symbol} submit raised but order is LIVE on broker — adopted.")
                 return {"action": "adopted_after_error", "tag": tag}
             _st(symbol).update(status=FLAT)
@@ -181,13 +192,47 @@ def on_position_update(positions: list[dict]) -> None:
     """User-hub GatewayUserPosition handler (pure-ish): a contract going to size 0
     means the OCO resolved — mark that symbol flat. Never places orders."""
     open_cids = {p.get("contractId") for p in positions if (p.get("size") or 0) != 0}
+    now = time.time()
     with _lock:
         for sym, s in _state.items():
             cid = s.get("contract_id")
             if s.get("status") in (OPEN, CLOSING) and cid and cid not in open_cids:
+                if now - s.get("open_ts", 0) < _FILL_GRACE:
+                    continue                          # too fresh — ignore a lagging event
                 s["status"] = FLAT
                 log.info("execution: %s position closed (broker) -> flat", sym)
                 notify.send(f"🏁 {sym} position closed on broker.")
+
+
+def reconcile() -> None:
+    """Periodic safety net (called every minute): sync per-symbol state with the broker's
+    open positions, so a missed user-hub event can't leave us stuck. Resets a stale OPEN to
+    FLAT (after a grace period for broker lag) and adopts an unexpected open position. This
+    is what makes a silent desync self-heal instead of freezing forever."""
+    if not settings.execute_broker():
+        return
+    try:
+        positions = topstep.search_open_positions(_acct())
+    except Exception:                                   # noqa: BLE001
+        log.exception("execution: periodic reconcile failed")
+        return
+    open_cids = {p.get("contractId") for p in positions if (p.get("size") or 0) != 0}
+    now = time.time()
+    with _lock:
+        for sym, s in _state.items():
+            cid = s.get("contract_id")
+            if s.get("status") in (OPEN, CLOSING):
+                if cid and cid in open_cids:
+                    continue                            # still open — fine
+                if now - s.get("open_ts", 0) < _FILL_GRACE:
+                    continue                            # too fresh — broker may lag
+                s["status"] = FLAT
+                log.warning("execution: reconcile %s -> FLAT (no broker position)", sym)
+                notify.send(f"🔄 {sym} reset to flat — no broker position found.")
+            elif cid and cid in open_cids:              # think flat but broker holds it
+                s.update(status=OPEN, open_ts=now)
+                log.warning("execution: reconcile adopted %s broker position", sym)
+                notify.send(f"♻️ {sym} broker position adopted by reconcile.")
 
 
 def reconcile_startup() -> None:
@@ -206,7 +251,7 @@ def reconcile_startup() -> None:
         except Exception:                               # noqa: BLE001
             continue
         if any(p.get("contractId") == cid and (p.get("size") or 0) != 0 for p in positions):
-            _st(sym).update(status=OPEN, contract_id=cid)
+            _st(sym).update(status=OPEN, contract_id=cid, open_ts=time.time())
             log.warning("execution: adopted existing %s position on startup", sym)
             notify.send(f"♻️ Adopted existing {sym} position on startup.")
 
