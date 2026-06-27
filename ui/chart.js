@@ -203,6 +203,8 @@
       }
       if (!b) b = bars[bars.length - 1];
       if (b) renderLegend(b, param && param.time);
+      var pt = param && param.point;                 // trade-box hover tooltip
+      updateTradeTip(pt ? pt.x : null, pt ? pt.y : null);
     });
 
     setupOverlayCanvas();
@@ -697,7 +699,65 @@
       redrawLevels();
     }).catch(function () {});
   }
+  // ── hover tooltip: trade details when the cursor is over a PnL box ──
+  var tradeBoxes = [];                          // [{x1,x2,y1,y2,t}] hit-test rects, rebuilt per draw
+  function tradeTipEl() {
+    var el = $('cx-trade-tip');
+    if (!el) {
+      el = document.createElement('div'); el.id = 'cx-trade-tip'; el.className = 'cx-trade-tip';
+      el.style.display = 'none'; $('cx-host').appendChild(el);
+    }
+    return el;
+  }
+  function fmtDur(s) {
+    var m = Math.max(0, Math.round(s / 60));
+    return m < 60 ? m + 'm' : Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  }
+  function tradeTipHTML(t) {
+    var long = t.side === 1, col = long ? S.up : S.down;
+    var tpP = Math.abs(t.tp - t.entry);
+    var slP = (t.sl_pts != null ? +t.sl_pts : Math.abs(t.sl - t.entry));
+    var rr = slP > 0 ? tpP / slP : 0;
+    var oc = t.outcome == null ? 'OPEN' : String(t.outcome).toUpperCase();
+    var pc = function (x) { return x > 0 ? S.up : x < 0 ? S.down : ''; };
+    var row = function (k, v, c) {
+      return '<div class="cx-tt-row"><span>' + k + '</span><b' +
+        (c ? ' style="color:' + c + '"' : '') + '>' + v + '</b></div>';
+    };
+    var h = '<div class="cx-tt-head" style="color:' + col + '">' +
+            (long ? '▲ LONG' : '▼ SHORT') + ' · ' + oc + '</div>';
+    h += row('Entry', (+t.entry).toFixed(2));
+    h += row('TP', (+t.tp).toFixed(2) + '  ·  ' + tpP.toFixed(1) + ' pt');
+    h += row('SL', (+t.sl).toFixed(2) + '  ·  ' + slP.toFixed(1) + ' pt');
+    h += row('R : R', rr.toFixed(2) + ' : 1');
+    if (t.R != null) h += row('Realized', (t.R >= 0 ? '+' : '') + (+t.R).toFixed(2) + ' R', pc(t.R));
+    if (t.contracts != null) h += row('Size', t.contracts + ' ' + (S.sym === 'ES' ? 'MES' : 'MNQ'));
+    if (t.risk_usd != null) h += row('Risk', '$' + (+t.risk_usd).toFixed(0));
+    if (t.pnl_usd != null) h += row('P&L', (t.pnl_usd >= 0 ? '+$' : '−$') + Math.abs(+t.pnl_usd).toFixed(0), pc(t.pnl_usd));
+    if (t.entry_ts && t.exit_ts) h += row('Held', fmtDur(t.exit_ts - t.entry_ts));
+    return h;
+  }
+  function updateTradeTip(px, py) {
+    var el = tradeTipEl();
+    if (px != null && py != null) {
+      for (var i = tradeBoxes.length - 1; i >= 0; i--) {       // topmost (last drawn) first
+        var b = tradeBoxes[i];
+        if (px >= b.x1 - 2 && px <= b.x2 + 2 && py >= b.y1 - 2 && py <= b.y2 + 2) {
+          el.innerHTML = tradeTipHTML(b.t); el.style.display = 'block';
+          var host = $('cx-host'), hw = host.clientWidth, hh = host.clientHeight;
+          var tw = el.offsetWidth, th = el.offsetHeight;
+          var lx = px + 16; if (lx + tw > hw - 4) lx = px - tw - 16;
+          var ly = py + 12; if (ly + th > hh - 4) ly = hh - th - 4;
+          el.style.left = Math.max(4, lx) + 'px'; el.style.top = Math.max(4, ly) + 'px';
+          return;
+        }
+      }
+    }
+    el.style.display = 'none';
+  }
+
   function drawTrades(ctx, rightX) {
+    tradeBoxes = [];
     if (!TRADES.on || S.tf !== '1m' || !candle || (!tradesData.length && !liveTrade)) return;
     var win = TRADES.winOp / 100, loss = TRADES.lossOp / 100;
     for (var i = 0; i < tradesData.length; i++) {
@@ -716,6 +776,7 @@
       ctx.beginPath(); ctx.moveTo(x1, ye); ctx.lineTo(x2, ye); ctx.stroke();
       ctx.strokeStyle = hexToRgba('#8892a4', 0.35);
       ctx.strokeRect(x1, Math.min(yt, ys), w, Math.abs(ys - yt));
+      tradeBoxes.push({ x1: x1, x2: x1 + w, y1: Math.min(yt, ys), y2: Math.max(yt, ys), t: t });
     }
     if (liveTrade) {                            // the open trade — box extends to the latest bar
       var lt = liveTrade, lx1 = timeToX(lt.entry_ts);
@@ -727,6 +788,7 @@
         ctx.fillStyle = hexToRgba(S.down, loss); ctx.fillRect(lx1, Math.min(le, lsl), lw, Math.abs(lsl - le));
         ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.strokeStyle = hexToRgba('#00d2ff', 0.95);
         ctx.strokeRect(lx1, Math.min(ltp, lsl), lw, Math.abs(lsl - ltp)); ctx.setLineDash([]);
+        tradeBoxes.push({ x1: lx1, x2: lx1 + lw, y1: Math.min(ltp, lsl), y2: Math.max(ltp, lsl), t: lt });
       }
     }
   }
