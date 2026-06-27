@@ -22,7 +22,20 @@ from src import dataset, score
 SIG_DIR = config.DATA_DIR / "signals"
 _COLS = {"ts": "int64", "p_up": "float32", "p_conf": "float32",
          "side": "int8", "fire": "bool"}
+_LIVE_COLS = {**_COLS, "model": "object"}    # live rows are tagged with the model that fired them
 _EPOCH = pd.Timestamp("1970-01-01")
+
+
+def load_live(symbol):
+    """The append-only LIVE signal file, with a 'model' tag (legacy rows -> 'production',
+    since production was the live model when they were written)."""
+    p = path_live(symbol)
+    if not p.exists():
+        return pd.DataFrame(columns=list(_LIVE_COLS))
+    df = pd.read_parquet(p)
+    if "model" not in df.columns:
+        df["model"] = "production"
+    return df
 
 
 def _to_etnaive(ts_utc: pd.Series) -> np.ndarray:
@@ -49,17 +62,22 @@ def load_for_model(symbol, model_name=None, frm=None, to=None):
     name = (model_name or "").strip()
     if not name or name == "live":
         name = registry.active_name()
-    if name == registry.active_name():
-        return load(symbol, frm, to)                 # live model = current global store
-    p = model_signal_path(name, symbol)
-    if not p.exists():
-        return pd.DataFrame(columns=list(_COLS))
-    df = pd.read_parquet(p).sort_values("ts")
+    # base history: the live model uses the global static store; others use their snapshot
+    if name == registry.active_name() and path(symbol).exists():
+        base = pd.read_parquet(path(symbol))
+    else:
+        p = model_signal_path(name, symbol)
+        base = pd.read_parquet(p) if p.exists() else pd.DataFrame(columns=list(_COLS))
+    # live: ONLY this model's own live rows (tagged) — fixes cross-model live contamination
+    live = load_live(symbol)
+    if not live.empty:
+        live = live[live["model"] == name][list(_COLS)]
+    df = pd.concat([base[list(_COLS)], live], ignore_index=True).drop_duplicates("ts", keep="last")
     if frm is not None:
         df = df[df["ts"] >= int(frm)]
     if to is not None:
         df = df[df["ts"] <= int(to)]
-    return df
+    return df.sort_values("ts")
 
 
 def _levels(d):
@@ -168,9 +186,14 @@ def backfill(symbols=("NQ", "ES")) -> dict:
 
 
 def load(symbol: str, frm: int | None = None, to: int | None = None) -> pd.DataFrame:
-    """Historical + live signals overlapping [frm, to] (unix seconds), live winning
-    on ts collisions. Empty frame if none."""
-    parts = [pd.read_parquet(p) for p in (path(symbol), path_live(symbol)) if p.exists()]
+    """Historical + ALL live signals overlapping [frm, to] (unix seconds), live winning on
+    ts collisions. Model-agnostic; for the chart use load_for_model. Empty frame if none."""
+    parts = []
+    if path(symbol).exists():
+        parts.append(pd.read_parquet(path(symbol))[list(_COLS)])
+    lv = load_live(symbol)
+    if not lv.empty:
+        parts.append(lv[list(_COLS)])
     if not parts:
         return pd.DataFrame(columns=list(_COLS))
     df = pd.concat(parts, ignore_index=True).drop_duplicates("ts", keep="last")
@@ -181,17 +204,16 @@ def load(symbol: str, frm: int | None = None, to: int | None = None) -> pd.DataF
     return df.sort_values("ts")
 
 
-def append(symbol: str, row: dict):
-    """Append one live signal to the small live file (dedup on ts, newest wins).
-    The big historical file is never rewritten on the hot path."""
+def append(symbol: str, row: dict, model: str | None = None):
+    """Append one live signal to the small live file (dedup on ts, newest wins), TAGGED with
+    the live model that fired it (defaults to the active model) so per-model views stay clean."""
+    from src import registry
     SIG_DIR.mkdir(exist_ok=True)
     p = path_live(symbol)
-    new = pd.DataFrame([row]).astype(_COLS)
-    if p.exists():
-        old = pd.read_parquet(p)
-        out = pd.concat([old[old["ts"] != row["ts"]], new], ignore_index=True)
-    else:
-        out = new
+    row = dict(row); row["model"] = model or registry.active_name()
+    new = pd.DataFrame([row]).astype(_LIVE_COLS)
+    old = load_live(symbol)
+    out = pd.concat([old[old["ts"] != row["ts"]], new], ignore_index=True) if not old.empty else new
     out.sort_values("ts").to_parquet(p, index=False)
 
 

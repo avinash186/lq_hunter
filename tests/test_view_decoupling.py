@@ -67,17 +67,43 @@ def test_viewing_does_not_change_live_model():
         assert registry.active_name() == live_before == "m0"   # live model untouched
 
 
-def test_blank_and_production_use_live_store(monkeypatch=None):
+def test_production_reads_prod_store():
+    # blank/None/'production' (with production active) -> the production backtest path store
     with tmp_registry():
-        sentinel = pd.DataFrame([{"entry_ts": 1}])
-        orig = trades.load
-        trades.load = lambda *a, **k: sentinel           # type: ignore
+        rows = pd.DataFrame([{**{c: 0 for c in trades._COLS}, "entry_ts": 9, "exit_ts": 10,
+                              "outcome": "tp"}]).astype(trades._COLS)
+        orig = trades._read_or_empty
+        orig_lv = trades.load_live
+        seen = []
+        trades._read_or_empty = lambda p: (seen.append(str(p)), rows)[1]   # type: ignore
+        trades.load_live = lambda sym, variant="lq": pd.DataFrame(columns=list(trades._COLS))   # type: ignore
         try:
-            assert trades.load_for_model("NQ", "").equals(sentinel)
-            assert trades.load_for_model("NQ", "production").equals(sentinel)
-            assert trades.load_for_model("NQ", None).equals(sentinel)
+            for m in ["production", "", None]:
+                assert len(trades.load_for_model("NQ", m)) == 1
+            assert all("trades_nq_lq" in s for s in seen), seen
         finally:
-            trades.load = orig                           # type: ignore
+            trades._read_or_empty = orig                 # type: ignore
+            trades.load_live = orig_lv                   # type: ignore
+
+
+def test_live_trades_attributed_per_model():
+    # the fix: each model's view gets ONLY its own tagged live trades (no cross-contamination)
+    with tmp_registry():
+        _register("m0"); registry.promote("m0"); _seed_is_store("m0", 1)
+        _register("wk1"); _seed_is_store("wk1", 1)
+        live = pd.DataFrame([
+            {**{c: 0 for c in trades._COLS}, "entry_ts": 500, "exit_ts": 501, "outcome": "tp", "model": "m0"},
+            {**{c: 0 for c in trades._COLS}, "entry_ts": 600, "exit_ts": 601, "outcome": "tp", "model": "wk1"},
+        ])
+        orig = trades.load_live
+        trades.load_live = lambda sym, variant="lq": live    # type: ignore
+        try:
+            m0 = set(trades.load_for_model("NQ", "").entry_ts)        # active m0
+            wk = set(trades.load_for_model("NQ", "wk1").entry_ts)
+            assert 500 in m0 and 600 not in m0                        # m0 gets only its live trade
+            assert 600 in wk and 500 not in wk                        # wk gets only its live trade
+        finally:
+            trades.load_live = orig                      # type: ignore
 
 
 def test_view_unknown_model_is_empty_not_error():
@@ -109,16 +135,19 @@ def _seed_model_signals(name, sym="nq"):
 
 
 def test_signals_blank_resolves_to_active_global():
-    with tmp_registry():
+    with tmp_registry() as tmp:
         _register("m0"); registry.promote("m0")          # m0 is the live model
-        sentinel = pd.DataFrame([{"ts": 1}])
-        orig = signals.load
-        signals.load = lambda *a, **k: sentinel           # global store path
+        base = pd.DataFrame({"ts": [1, 2], "p_up": [.6, .4], "p_conf": [.6, .5],
+                             "side": [1, 0], "fire": [True, False]}).astype(signals._COLS)
+        gp = tmp / "global_nq.parquet"; base.to_parquet(gp)
+        op, ol = signals.path, signals.load_live
+        signals.path = lambda sym: gp                     # type: ignore  (the global static store)
+        signals.load_live = lambda sym: pd.DataFrame(columns=list(signals._LIVE_COLS))  # type: ignore
         try:
-            assert signals.load_for_model("NQ", "").equals(sentinel)    # live -> global
-            assert signals.load_for_model("NQ", "m0").equals(sentinel)  # explicit active -> global
+            assert len(signals.load_for_model("NQ", "")) == 2     # blank -> active m0 -> global static
+            assert len(signals.load_for_model("NQ", "m0")) == 2   # explicit active -> global static
         finally:
-            signals.load = orig
+            signals.path, signals.load_live = op, ol     # type: ignore
 
 
 def test_signals_other_model_reads_per_model_snapshot():
