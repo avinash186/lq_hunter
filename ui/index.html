@@ -77,9 +77,12 @@
           <button class="cx-tool active" id="cx-levels-btn" title="Liquidity levels">Liq</button>
           <button class="cx-tool active" id="cx-sig-toggle" title="Model signals (Stage-1 score)">Sig</button>
           <button class="cx-tool active" id="cx-trades-toggle" title="Trade positions (liquidity-level exit)">Trd</button>
-          <select id="cx-trade-model" class="cx-model-sel" title="Exit model for plotted trades">
-            <option value="lq">LQ levels</option>
-            <option value="atr">&plusmn;1.5 ATR</option>
+          <select id="cx-trade-model" class="cx-model-sel" title="View a model's historical trades (does NOT change the live model — set that on Lab &rarr; Models)">
+            <option value="">Live model</option>
+          </select>
+          <select id="cx-trade-variant" class="cx-model-sel" title="Exit style for plotted trades: LQ = liquidity-level exits (what trades live); ATR = symmetric &plusmn;1.5 ATR">
+            <option value="lq">LQ exit</option>
+            <option value="atr">ATR exit</option>
           </select>
           <button class="cx-tool active" id="cx-vol-toggle" title="Toggle volume">Vol</button>
           <button class="cx-tool" id="cx-fullscreen" title="Fullscreen">&#9974;</button>
@@ -198,7 +201,7 @@
     <div class="page" id="page-lab">
       <div class="ph"><div class="ph-left">
         <div class="ph-title">Model Lab</div>
-        <div class="ph-sub">Create models by labeling setups; compare and activate trained models</div>
+        <div class="ph-sub">Versioned models + weekly retrains. Only the model you Set Live trades &amp; gets retrained; auto-promotes a challenger that beats it on 100 shadow trades.</div>
       </div></div>
       <div class="lab-tabs">
         <button class="lab-tab active" data-lab="models" onclick="lab.tab(this)">Models</button>
@@ -206,8 +209,8 @@
       </div>
       <div class="lab-pane active" id="lab-models">
         <div class="card"><div class="tbl-wrap"><table class="dt">
-          <thead><tr><th>Model</th><th>Status</th><th>Win% IS / OOS</th><th>PF IS / OOS</th><th>Sharpe IS / OOS</th><th>maxDD R IS / OOS</th><th>DSR</th><th>IS−OOS gap</th><th>$ OOS</th><th></th></tr></thead>
-          <tbody id="lab-models-body"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+          <thead><tr><th>Model</th><th>Status</th><th>Parent</th><th>Shadow (→100)</th><th>Win% IS / OOS</th><th>PF IS / OOS</th><th>Sharpe IS / OOS</th><th>maxDD R IS / OOS</th><th>DSR</th><th>IS−OOS gap</th><th>$ OOS</th><th></th></tr></thead>
+          <tbody id="lab-models-body"><tr><td colspan="12" class="empty">Loading…</td></tr></tbody>
         </table></div></div>
       </div>
       <div class="lab-pane" id="lab-labeling">

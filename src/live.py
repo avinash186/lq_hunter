@@ -183,6 +183,8 @@ class LiveEngine:
         threading.Thread(target=self._minute_loop, name="live-minute", daemon=True).start()
         threading.Thread(target=self._flush_loop, name="live-flush", daemon=True).start()
         threading.Thread(target=self._backfill_scores, name="live-backfill", daemon=True).start()
+        if config.WEEKLY_RETRAIN:                          # OFF by default (see config.py)
+            threading.Thread(target=self._retrain_loop, name="live-retrain", daemon=True).start()
 
     def _backfill_scores(self):
         """Retroactively score bars captured while the program was stopped. Gaps
@@ -575,6 +577,51 @@ class LiveEngine:
                 self._check_sweeps(s, b["low"], ts, confirmed=True)
             if bars:
                 self.broadcast({"e": "reconciled", "sym": s})
+
+    # ───────────── weekly retrain + auto-promotion (gated; OFF by default) ─────────────
+    def _sleep_until_stop(self, secs: float) -> bool:
+        """Interruptible sleep; returns True if a stop was requested."""
+        end = time.time() + max(secs, 0)
+        while not self._stop and time.time() < end:
+            time.sleep(min(30.0, max(end - time.time(), 0.1)))
+        return self._stop
+
+    def _retrain_loop(self):
+        """Fri 17:02 ET: fork the live model, retrain a challenger, refresh shadow trades,
+        and (if AUTO_PROMOTE) promote a challenger that beats the live model on >=100
+        shadow trades. A retrain NEVER changes the live model directly."""
+        from src import retrain, registry, shadow, shadow_live
+        while not self._stop:
+            now = retrain._et_now()
+            if self._sleep_until_stop((retrain.next_retrain_dt(now) - now).total_seconds()):
+                return
+            try:
+                res = retrain.retrain_from_live()
+                log.info("live: weekly retrain registered challenger %s (parent %s)",
+                         res["name"], res["parent"])
+                try:                                          # cache the challenger's own IS + OOS metrics
+                    shadow_live.cache_metrics(res["name"])
+                except Exception:
+                    log.exception("live: per-model metric backtest failed (continuing)")
+                if notify.configured():
+                    notify.send(f"🧪 Weekly retrain: registered challenger {res['name']} "
+                                f"(forked from live {res['parent']})")
+            except Exception:
+                log.exception("live: weekly retrain failed")
+                if notify.configured():
+                    try:
+                        notify.send("⚠️ Weekly retrain failed — see logs")
+                    except Exception:
+                        pass
+            if config.AUTO_PROMOTE:
+                try:
+                    shadow_live.update_challengers(self.symbols)
+                    for v in shadow.run():
+                        if v.get("promoted") and notify.configured():
+                            notify.send(f"🏆 Auto-promoted {v['name']} to LIVE — beat the "
+                                        f"champion on {v['shadow_trades']} shadow trades")
+                except Exception:
+                    log.exception("live: shadow update / auto-promotion failed")
 
     # ───────────── persistence ─────────────
     def _flush_loop(self):

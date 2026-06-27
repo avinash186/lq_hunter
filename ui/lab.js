@@ -8,16 +8,22 @@
   function pair(a, b, fmt) { return fmt(a) + '  /  ' + fmt(b); }
 
   function row(m) {
-    var mt = m.metrics || {}, is = mt.is || {}, oos = mt.oos || {};
+    var mt = m.metrics || {}, is = mt.is || {}, oos = mt.oos || {}, sh = m.shadow || {};
     var dsr = oos.dsr, gap = mt.is_oos_gap;
     var overfit = (gap != null && gap > 0.10) || (dsr != null && dsr < 0.90);
-    var act = m.active
-      ? '<span class="lab-badge">ACTIVE</span>'
-      : '<button class="btn btn-secondary btn-sm" data-act="' + m.name + '">Set active</button>';
+    // LIVE = the one model that trades and gets retrained. Others get a "Set live" button.
+    var act = m.live
+      ? '<span class="lab-badge">LIVE</span>'
+      : '<button class="btn btn-secondary btn-sm" data-act="' + m.name + '">Set live</button>';
     var usd = oos.total_usd != null ? '$' + Math.round(oos.total_usd).toLocaleString() : '—';
-    return '<tr' + (m.active ? ' class="lab-active-row"' : '') + '>' +
+    var shadow = sh.trades != null
+      ? sh.trades + '/100' + (sh.pf != null ? ' · PF ' + f2(sh.pf) : '')
+      : '—';
+    return '<tr' + (m.live ? ' class="lab-active-row"' : '') + '>' +
       '<td><strong>' + m.name + '</strong></td>' +
       '<td>' + (m.status || 'trained') + '</td>' +
+      '<td>' + (m.parent || '—') + '</td>' +
+      '<td>' + shadow + '</td>' +
       '<td>' + pair(is.win, oos.win, pct) + '</td>' +
       '<td>' + pair(is.pf, oos.pf, f2) + '</td>' +
       '<td>' + pair(is.sharpe, oos.sharpe, f2) + '</td>' +
@@ -44,12 +50,12 @@
         var ms = (d && d.models) || [];
         body.innerHTML = ms.length
           ? ms.map(row).join('')
-          : '<tr><td colspan="10" class="empty">No models yet — train one in the Labeling tab.</td></tr>';
+          : '<tr><td colspan="12" class="empty">No models yet — train one in the Labeling tab.</td></tr>';
         body.querySelectorAll('button[data-act]').forEach(function (btn) {
           btn.onclick = function () { lab.activate(btn.getAttribute('data-act')); };
         });
       }).catch(function () {
-        body.innerHTML = '<tr><td colspan="10" class="empty">Failed to load models.</td></tr>';
+        body.innerHTML = '<tr><td colspan="12" class="empty">Failed to load models.</td></tr>';
       });
     },
     activate: function (name) {

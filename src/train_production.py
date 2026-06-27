@@ -30,8 +30,13 @@ CAT = [c for c in CATEGORICAL if c in BASE_FEATURES]
 CALIB_FRAC = 0.2   # tail of resolved data held out to fit the calibrator + best_q
 
 
-def run():
-    MODELS.mkdir(exist_ok=True)
+def run(out_dir=None):
+    """Train on all data and persist the 4 artifacts. ``out_dir`` (default data/models/)
+    lets the weekly retrain write into a CHALLENGER directory without ever overwriting the
+    live production model."""
+    from pathlib import Path
+    out = Path(out_dir) if out_dir is not None else MODELS
+    out.mkdir(parents=True, exist_ok=True)
     print("assembling matrix ...", flush=True)
     d = dataset.assemble(config.SYMBOLS)
     d = d[d["dir_label"].notna()].sort_values("ts", kind="stable").reset_index(drop=True)
@@ -80,9 +85,9 @@ def run():
         if m.sum() >= 200 and np.nanmean(rnet[m]) > best_e:
             best_e, best_q = np.nanmean(rnet[m]), q
 
-    primary.save_model(str(MODELS / "primary.txt"))
-    meta.save_model(str(MODELS / "meta.txt"))
-    with open(MODELS / "calibrator.pkl", "wb") as f:
+    primary.save_model(str(out / "primary.txt"))
+    meta.save_model(str(out / "meta.txt"))
+    with open(out / "calibrator.pkl", "wb") as f:
         pickle.dump(iso, f)
     cfg = {
         "features": BASE_FEATURES, "categorical": CAT, "k": DIR_K,
@@ -91,8 +96,8 @@ def run():
         "trained_through": int(d["ts"].max()),
         "symbol_id": dataset._SYMBOL_ID,
     }
-    (MODELS / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    print(f"saved models to {MODELS}")
+    (out / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    print(f"saved models to {out}")
     print(f"  best_q={best_q:.4f}  calib net expectancy/trade={best_e:+.4f}R")
     print(f"  trained_through={d['ts'].max()} (ET-naive epoch s)")
     return cfg

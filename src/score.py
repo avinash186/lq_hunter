@@ -58,11 +58,13 @@ def _prep(df: pd.DataFrame, cols) -> pd.DataFrame:
     return X
 
 
-def score(feat: pd.DataFrame, risk: np.ndarray, symbol_id: np.ndarray) -> pd.DataFrame:
+def score(feat: pd.DataFrame, risk: np.ndarray, symbol_id: np.ndarray,
+          model_dir=None) -> pd.DataFrame:
     """Score a feature frame. ``risk`` = k*atr_fast per row (= dir_risk, the stop
-    distance, for the cost filter); ``symbol_id`` per row. Returns a frame with
-    p_up, p_conf, side, fire, size."""
-    cfg, primary, meta, iso = _load()
+    distance, for the cost filter); ``symbol_id`` per row. ``model_dir`` overrides the
+    active model (used to SHADOW-score a challenger); default = the live model. Returns a
+    frame with p_up, p_conf, side, fire, size."""
+    cfg, primary, meta, iso = _load_dir(str(model_dir)) if model_dir is not None else _load()
     cols = cfg["features"]
     X = _prep(feat, cols)
     p_up = np.clip(primary.predict(X), 1e-6, 1 - 1e-6)
