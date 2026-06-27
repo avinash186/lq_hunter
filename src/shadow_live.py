@@ -63,9 +63,14 @@ def update_challenger(name: str, symbols, assembled=None, variant: str = "lq") -
     return appended
 
 
+def is_trades_path(name, symbol):           # per-model full-history IS backtest trades
+    return registry.model_dir(name) / f"trades_{symbol.lower()}.parquet"
+
+
 def score_fires(d: pd.DataFrame, model_dir: str):
-    from src import score
-    return score.score(d, d["dir_risk"].to_numpy(), d["symbol_id"].to_numpy(), model_dir=model_dir)
+    from src import score, signals
+    return score.score(d, d["dir_risk"].to_numpy(), d["symbol_id"].to_numpy(),
+                       model_dir=model_dir, levels=signals._levels(d))   # honor cost_mode (lq) gate
 
 
 def metrics_block(trades_df, n_trials: int = 1) -> dict:
@@ -102,7 +107,9 @@ def backtest_metrics(name: str, symbols=None, assembled=None, variant: str = "lq
                               "fire": sc["fire"].to_numpy()[mask]})
         fires = fires[fires["fire"]][["ts", "side"]].sort_values("ts")
         if not fires.empty:
-            frames.append(trades.build(s, variant, fires=fires))
+            tl_s = trades.build(s, variant, fires=fires)
+            tl_s.to_parquet(is_trades_path(name, s), index=False)   # save for the UI dropdown
+            frames.append(tl_s)
     if not frames:
         return {"is": {"trades": 0}}
     tl = pd.concat(frames, ignore_index=True)

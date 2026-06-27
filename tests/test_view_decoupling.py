@@ -35,25 +35,32 @@ def _register(name):
     registry.register(name, s, {})
 
 
-def _seed_shadow(name, n):
+def _seed_is_store(name, n, sym="nq"):
     rows = [{"entry_ts": 1000 + i, "exit_ts": 1000 + i + 1, "side": 1, "entry": 100.0,
              "tp": 101.0, "sl": 99.0, "sl_pts": 75.0, "contracts": 1, "risk_usd": 150.0,
              "R": 1.0, "pnl_usd": 150.0, "outcome": "tp"} for i in range(n)]
     registry.model_dir(name).mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_parquet(shadow.shadow_path(name), index=False)
+    pd.DataFrame(rows).to_parquet(registry.model_dir(name) / f"trades_{sym}.parquet", index=False)
 
 
-def test_view_challenger_returns_its_shadow_trades():
+def test_view_model_returns_its_is_store():
     with tmp_registry():
-        _register("wk1"); _seed_shadow("wk1", 7)
+        _register("wk1"); _seed_is_store("wk1", 7)
         t = trades.load_for_model("NQ", "wk1")
         assert len(t) == 7 and set(t["outcome"]) == {"tp"}
+
+
+def test_blank_and_live_resolve_to_active_model():
+    with tmp_registry():
+        _register("m0"); registry.promote("m0"); _seed_is_store("m0", 4)
+        assert len(trades.load_for_model("NQ", "")) == 4     # 'Live model' -> active (m0)
+        assert len(trades.load_for_model("NQ", "live")) == 4
 
 
 def test_viewing_does_not_change_live_model():
     with tmp_registry():
         _register("m0"); registry.promote("m0")          # m0 is live
-        _register("wk1"); _seed_shadow("wk1", 5)
+        _register("wk1"); _seed_is_store("wk1", 5)
         live_before = registry.active_name()
         trades.load_for_model("NQ", "wk1")               # browse a different model
         trades.load_for_model("NQ", "wk1", frm=0, to=10_000)

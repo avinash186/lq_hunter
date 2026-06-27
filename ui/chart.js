@@ -738,10 +738,12 @@
       // trades drawn) — it never switches the live model (that is the Models page "Set live").
       fetch('/api/models').then(function (r) { return r.json(); }).then(function (d) {
         var ms = (d && d.models) || [], live = (d && d.active) || 'production';
+        // 'Live model' = whatever is switched on; list every other model (incl. production)
+        // so you can switch the VIEW to compare trades. Selecting NEVER changes the live model.
         var opts = '<option value="">Live model (' + live + ')</option>';
         ms.forEach(function (m) {
-          if (m.name === 'production' || m.live) return;          // 'Live model' already covers the active one
-          var tag = m.status ? ' [' + m.status + ']' : '';
+          if (m.live) return;                                    // 'Live model' already covers the active one
+          var tag = m.name === 'production' ? ' (baseline)' : (m.status ? ' [' + m.status + ']' : '');
           opts += '<option value="' + m.name + '">' + m.name + tag + '</option>';
         });
         sel.innerHTML = opts;

@@ -198,19 +198,20 @@ def load(symbol, variant="lq", frm=None, to=None, oos=False):
 
 def load_for_model(symbol, model_name=None, variant="lq", frm=None, to=None, oos=False):
     """Trades to DISPLAY for a registry model (view-only — never affects the live model).
-    'production'/'live'/blank -> the production backtest + live store; any other registered
-    model -> its walk-forward OOS trades (oos=1, data/models/<name>/oos_trades_*.parquet)
-    or the trades it took in shadow (shadow_trades.parquet)."""
+    Lets the UI compare what each model traded. Resolution:
+      blank / 'live'  -> the CURRENT live model (so the chart follows what is switched on);
+      'production'    -> the production backtest + live store;
+      any other model -> its per-model IS backtest (data/models/<name>/trades_*.parquet) or
+                         walk-forward OOS (oos=1, oos_trades_*.parquet)."""
     from src import registry
     name = (model_name or "").strip()
-    if not name or name in (registry.PROD, "live"):
+    if not name or name == "live":
+        name = registry.active_name()                # 'Live model' = whatever is switched on
+    if name == registry.PROD:
         return load(symbol, variant, frm, to, oos=oos)
-    if oos:
-        p = registry.model_dir(name) / f"oos_trades_{symbol.lower()}.parquet"
-        t = pd.read_parquet(p) if p.exists() else pd.DataFrame(columns=list(_COLS))
-    else:
-        from src import shadow
-        t = shadow.load_shadow(name)
+    sub = "oos_trades" if oos else "trades"          # per-model IS / OOS backtest stores
+    p = registry.model_dir(name) / f"{sub}_{symbol.lower()}.parquet"
+    t = pd.read_parquet(p) if p.exists() else pd.DataFrame(columns=list(_COLS))
     if t.empty:
         return t
     if frm is not None:

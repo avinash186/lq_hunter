@@ -7,40 +7,58 @@ no model promoted, score.py loads the same production model from data/models/ as
 """
 from __future__ import annotations
 
+import contextlib
 import json
 
 import config
 from src import registry, score
 
 
+@contextlib.contextmanager
+def as_production():
+    """Temporarily point ACTIVE at production (a real challenger may be promoted live, e.g.
+    cand_eng), so the backward-compat guarantee can be checked, then restore the real state."""
+    orig = registry.ACTIVE_FILE.read_text(encoding="utf-8").strip() if registry.ACTIVE_FILE.exists() else None
+    registry.set_active(registry.PROD)
+    try:
+        yield
+    finally:
+        if orig is not None:
+            registry.set_active(orig)
+        elif registry.ACTIVE_FILE.exists():
+            registry.ACTIVE_FILE.unlink()
+
+
 def test_default_active_is_production():
-    # no/invalid ACTIVE pointer => production root is active (backward compatible)
-    assert registry.active_name() == registry.PROD
-    assert registry.active_dir() == registry.ROOT
+    with as_production():                                # no/invalid ACTIVE => production root
+        assert registry.active_name() == registry.PROD
+        assert registry.active_dir() == registry.ROOT
 
 
 def test_score_loads_production_unchanged():
-    # the active model is the same files as data/models/ — byte-identical config
-    assert score.available()
-    cfg, primary, meta, iso = score._load()
-    raw = json.loads((registry.ROOT / "config.json").read_text(encoding="utf-8"))
-    assert cfg == raw                                   # registry path resolves to root
-    assert {"features", "best_q", "cost_max_r"} <= set(cfg)
+    with as_production():                                # active=production => loads the root files
+        assert score.available()
+        cfg, primary, meta, iso = score._load()
+        raw = json.loads((registry.ROOT / "config.json").read_text(encoding="utf-8"))
+        assert cfg == raw                               # registry path resolves to root
+        assert {"features", "best_q", "cost_max_r"} <= set(cfg)
 
 
 def test_list_includes_production_active():
-    models = registry.list_models()
-    prod = [m for m in models if m["name"] == registry.PROD]
-    assert prod and prod[0]["active"] is True
+    with as_production():
+        models = registry.list_models()
+        prod = [m for m in models if m["name"] == registry.PROD]
+        assert prod and prod[0]["active"] is True
 
 
 def test_cannot_activate_unknown():
-    try:
-        registry.set_active("does-not-exist")
-        assert False, "expected ValueError"
-    except ValueError:
-        pass
-    assert registry.active_name() == registry.PROD       # unchanged
+    with as_production():
+        try:
+            registry.set_active("does-not-exist")
+            assert False, "expected ValueError"
+        except ValueError:
+            pass
+        assert registry.active_name() == registry.PROD   # unchanged
 
 
 def test_register_never_touches_root():
