@@ -255,23 +255,24 @@ def bars(symbol: str, tf: str = "1m", limit: int = 20000, before: int | None = N
 
 @app.get("/api/scores/{symbol}")
 def scores(symbol: str, frm: int | None = Query(None, alias="from"),
-           to: int | None = Query(None), fired: int = 0):
-    """Model signals (historical + live). Windowed by [from, to] for the chart
-    (like /api/levels). With ``fired=1`` returns only fired signals across all
-    history (just {time, side}) — used by the prev/next-signal arrows.
-    Each windowed entry: {time, p_up (0-1), side (1 long/0 short), fire (meta gate)}."""
+           to: int | None = Query(None), fired: int = 0, model: str = ""):
+    """Model signals (historical + live). Windowed by [from, to] for the chart. With
+    ``fired=1`` returns only fired signals (prev/next-signal arrows). ``model`` selects which
+    model's signals (blank/'live' = the active model; any name = that model's snapshot) — so
+    the dots/arrows/band follow the dropdown, for every model + weekly retrain.
+    Each windowed entry: {time, p_up, side, fire}."""
     symbol = symbol.upper()
     if symbol not in config.SYMBOLS:
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
     if fired:
-        df = signals.load(symbol)
+        df = signals.load_for_model(symbol, model)
         df = df[df["fire"]]
         out = [{"time": int(r.ts), "side": int(r.side)} for r in df.itertuples()]
         return JSONResponse({"symbol": symbol, "scores": out})
-    df = signals.load(symbol, frm, to)
+    df = signals.load_for_model(symbol, model, frm, to)
     out = [{"time": int(r.ts), "p_up": float(r.p_up), "side": int(r.side), "fire": bool(r.fire)}
            for r in df.itertuples()]
-    return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol)})
+    return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol, model)})
 
 
 def _model_stats(name: str) -> dict:
@@ -391,19 +392,20 @@ def trade_list(symbol: str, frm: int | None = Query(None, alias="from"),
 _GATE: dict = {}
 
 
-def _gate_thr(symbol: str) -> dict:
+def _gate_thr(symbol: str, model: str = "") -> dict:
     """The model's effective firing envelope in p_up terms: the (robust) lowest
     p_up among fired LONGs and highest among fired SHORTs — fixed, model-derived
-    threshold lines for the UI (not user-editable)."""
-    if symbol in _GATE:
-        return _GATE[symbol]
-    df = signals.load(symbol)
+    threshold lines for the UI (per model, so the band lines follow the dropdown)."""
+    ckey = (symbol, (model or "").strip())
+    if ckey in _GATE:
+        return _GATE[ckey]
+    df = signals.load_for_model(symbol, model)
     f = df[df["fire"]] if len(df) else df
     longs = f[f["side"] == 1]["p_up"] if len(f) else []
     shorts = f[f["side"] == 0]["p_up"] if len(f) else []
     g = {"long": float(longs.quantile(0.02)) if len(longs) else 0.5,
          "short": float(shorts.quantile(0.98)) if len(shorts) else 0.5}
-    _GATE[symbol] = g
+    _GATE[ckey] = g
     return g
 
 

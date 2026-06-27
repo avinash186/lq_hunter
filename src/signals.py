@@ -34,6 +34,34 @@ def _to_etnaive(ts_utc: pd.Series) -> np.ndarray:
     return ((et - _EPOCH) // pd.Timedelta(seconds=1)).to_numpy().astype("int64")
 
 
+def model_signal_path(name, symbol):
+    """Per-model historical signals snapshot (saved by shadow_live.backtest_metrics)."""
+    from src import registry
+    return registry.model_dir(name) / f"signals_{symbol.lower()}.parquet"
+
+
+def load_for_model(symbol, model_name=None, frm=None, to=None):
+    """Signals to DISPLAY for a model (so the chart's dots/arrows/band follow the dropdown).
+    blank/'live' -> the ACTIVE model, served from the GLOBAL store (kept current by the live
+    engine, incl. live appends); any other model -> its per-model snapshot. Mirrors
+    trades.load_for_model so trades + signals switch together for every model + retrain."""
+    from src import registry
+    name = (model_name or "").strip()
+    if not name or name == "live":
+        name = registry.active_name()
+    if name == registry.active_name():
+        return load(symbol, frm, to)                 # live model = current global store
+    p = model_signal_path(name, symbol)
+    if not p.exists():
+        return pd.DataFrame(columns=list(_COLS))
+    df = pd.read_parquet(p).sort_values("ts")
+    if frm is not None:
+        df = df[df["ts"] >= int(frm)]
+    if to is not None:
+        df = df[df["ts"] <= int(to)]
+    return df
+
+
 def _levels(d):
     """(above, below, entry, atr) per row for score()'s LQ-stop cost gate (cost_mode='lq').
     Built from the assembled meta columns a/b/close + dir_risk (= DIR_K*atr_fast)."""

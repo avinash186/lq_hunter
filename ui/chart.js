@@ -646,15 +646,17 @@
     }
     var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
     var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
-    if (S.sym === scoreCache.key && vfrom >= scoreCache.from && vto <= scoreCache.to) return;
+    var skey = S.sym + ':' + (TRADES.model || 'live');     // signals follow the model dropdown
+    if (skey === scoreCache.key && vfrom >= scoreCache.from && vto <= scoreCache.to) return;
     var pad = Math.max(vto - vfrom, 7200), my = ++scoreReq;
     var u = new URL('/api/scores/' + S.sym, location.origin);
     u.searchParams.set('from', Math.floor(vfrom - pad)); u.searchParams.set('to', Math.ceil(vto + pad));
+    if (TRADES.model) u.searchParams.set('model', TRADES.model);
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       if (my !== scoreReq) return;
       scoreData = d.scores || [];
       if (d.gate) { scoreGate = d.gate; updateThrLabels(); }
-      scoreCache = { key: S.sym, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
+      scoreCache = { key: skey, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
       updateScoreMarkers(); redrawLevels();
     }).catch(function () {});
   }
@@ -751,7 +753,10 @@
       }).catch(function () {});
       sel.onchange = function () {
         TRADES.model = this.value; saveTrades();
-        tradesCache = { key: null, from: 0, to: 0 }; scheduleTradesFetch(); loadEquity();
+        // switch EVERYTHING per model: trade boxes + equity + the signal band/dots + fire arrows
+        tradesCache = { key: null, from: 0, to: 0 };
+        scoreCache = { key: null, from: 0, to: 0 };
+        scheduleTradesFetch(); loadEquity(); scheduleScoreFetch(); loadFired(S.sym);
       };
     }
     var vsel = $('cx-trade-variant');           // exit style (lq/atr) — restored as its own control
@@ -1003,6 +1008,7 @@
   // prev/next: scroll to the nearest fired signal within the loaded bars
   function loadFired(sym) {
     var u = new URL('/api/scores/' + sym, location.origin); u.searchParams.set('fired', '1');
+    if (TRADES.model) u.searchParams.set('model', TRADES.model);   // arrows follow the model dropdown
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       firedTimes[sym] = (d.scores || []).map(function (s) { return s.time; });
     }).catch(function () {});

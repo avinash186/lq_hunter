@@ -100,6 +100,16 @@ def backtest_metrics(name: str, symbols=None, assembled=None, variant: str = "lq
     d = d[d["pos_in_bracket"].notna()].reset_index(drop=True)
     sc = score_fires(d, str(registry.model_dir(name)))
     ets = signals._to_etnaive(d["ts"])
+    # save this model's per-bar signals snapshot (ALL symbols) for the chart dots/arrows/band
+    for s in dataset._SYMBOL_ID:
+        m = (d["symbol"] == s).to_numpy()
+        if not m.any():
+            continue
+        sig = pd.DataFrame({"ts": ets[m], "p_up": sc["p_up"].to_numpy()[m],
+                            "p_conf": sc["p_conf"].to_numpy()[m], "side": sc["side"].to_numpy()[m],
+                            "fire": sc["fire"].to_numpy()[m]}).astype(signals._COLS)
+        registry.model_dir(name).mkdir(parents=True, exist_ok=True)
+        sig.sort_values("ts").to_parquet(signals.model_signal_path(name, s), index=False)
     frames = []
     for s in symbols:
         mask = (d["symbol"] == s).to_numpy()

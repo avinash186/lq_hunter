@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import registry, shadow, trades
+from src import registry, shadow, trades, signals
 
 
 @contextlib.contextmanager
@@ -97,6 +97,43 @@ def test_view_model_oos_reads_per_model_oos_store():
         oos = trades.load_for_model("NQ", "wk1", oos=True)
         assert len(oos) == 1 and oos.iloc[0]["outcome"] == "tp"
         assert trades.load_for_model("NQ", "wk1", oos=False).empty   # shadow store still empty
+
+
+# ── per-model SIGNALS (dots / arrows / band follow the dropdown) ──
+def _seed_model_signals(name, sym="nq"):
+    df = pd.DataFrame({"ts": [1, 2, 3, 4], "p_up": [0.6, 0.4, 0.7, 0.5],
+                       "p_conf": [0.62, 0.5, 0.71, 0.55], "side": [1, 0, 1, 0],
+                       "fire": [True, False, True, False]})
+    registry.model_dir(name).mkdir(parents=True, exist_ok=True)
+    df.astype(signals._COLS).to_parquet(signals.model_signal_path(name, sym), index=False)
+
+
+def test_signals_blank_resolves_to_active_global():
+    with tmp_registry():
+        _register("m0"); registry.promote("m0")          # m0 is the live model
+        sentinel = pd.DataFrame([{"ts": 1}])
+        orig = signals.load
+        signals.load = lambda *a, **k: sentinel           # global store path
+        try:
+            assert signals.load_for_model("NQ", "").equals(sentinel)    # live -> global
+            assert signals.load_for_model("NQ", "m0").equals(sentinel)  # explicit active -> global
+        finally:
+            signals.load = orig
+
+
+def test_signals_other_model_reads_per_model_snapshot():
+    with tmp_registry():
+        _register("m0"); registry.promote("m0")          # active = m0
+        _register("wk1"); _seed_model_signals("wk1")     # wk1 not active -> per-model store
+        s = signals.load_for_model("NQ", "wk1")
+        assert len(s) == 4 and int(s["fire"].sum()) == 2
+        assert registry.active_name() == "m0"            # viewing didn't change the live model
+
+
+def test_signals_unknown_model_empty():
+    with tmp_registry():
+        _register("m0"); registry.promote("m0")
+        assert signals.load_for_model("NQ", "ghost").empty
 
 
 if __name__ == "__main__":
