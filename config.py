@@ -58,6 +58,14 @@ EXEC_POINT_VALUE = {"NQ": 2.0, "ES": 5.0}
 # weak / overfit-prone (docs/research_exit_strategy.md). Others are still scored/charted.
 TRADE_SYMBOLS = [s.strip().upper() for s in os.getenv("TRADE_SYMBOLS", "NQ").split(",") if s.strip()]
 
+# ── Weekly retrain (Lab) ──
+# Every Friday 17:02 ET, fork the LIVE model, retrain on the week's data, and register an
+# inert challenger. OFF by default — enable only after reviewing on the weekly-retrain branch.
+WEEKLY_RETRAIN = os.getenv("WEEKLY_RETRAIN", "0").strip().lower() not in ("0", "false", "no", "")
+# Let a challenger that beats the live model on >=100 shadow trades (promotion gate)
+# AUTO-promote — repointing the live model with no manual step. OFF by default.
+AUTO_PROMOTE = os.getenv("AUTO_PROMOTE", "0").strip().lower() not in ("0", "false", "no", "")
+
 # ── Broker execution (Topstep / ProjectX) ──
 # OFF by default: when off, a fired signal is DRY-RUN (the exact OCO bracket payload is
 # logged + alerted, NO order is sent). Set EXECUTE_BROKER=1 in .env to send real orders.
