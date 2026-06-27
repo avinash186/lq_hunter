@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S ET",
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 from fastapi import FastAPI, Query, WebSocket
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -30,6 +30,21 @@ from src import data_loader, fetcher, liquidity, live, signals, trades, registry
 
 app = FastAPI(title="lgbm-trader")
 app.add_middleware(GZipMiddleware, minimum_size=1024)   # compress bar payloads
+
+
+@app.middleware("http")
+async def _no_cache_ui(request, call_next):
+    """Force the browser to REVALIDATE UI assets every load (cheap 304 if unchanged, full
+    fetch when changed). Without this, browsers cache chart.js/lab.js indefinitely and serve
+    a STALE copy after a deploy — which silently mismatches the UI against the new API
+    (e.g. signals/trades looking 'swapped' across models)."""
+    resp = await call_next(request)
+    p = request.url.path
+    if p == "/" or p.startswith("/ui"):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
+
+
 app.mount("/ui", StaticFiles(directory=config.UI_DIR), name="ui")
 
 # tf code -> (pandas resample rule, minutes-per-bar)
@@ -64,9 +79,22 @@ def _nearest_cached(symbol: str, n: int, tset, tick: float, confirm: int = 0,
     return _NEAREST[key]
 
 
+_ASSET_FILES = ("hub.css", "app.js", "chart.js", "lab.js", "labchart.js")
+
+
 @app.get("/")
 def index():
-    return FileResponse(config.UI_DIR / "index.html")
+    """Serve index.html with CONTENT-VERSIONED asset URLs (/ui/chart.js?v=<hash>). The hash
+    changes only when a file changes, so the browser AND any CDN/cloudflare edge fetch the
+    new asset automatically — no stale chart.js after a deploy, ever."""
+    import hashlib
+    html = (config.UI_DIR / "index.html").read_text(encoding="utf-8")
+    for a in _ASSET_FILES:
+        p = config.UI_DIR / a
+        if p.exists():
+            v = hashlib.md5(p.read_bytes()).hexdigest()[:10]
+            html = html.replace(f'"/ui/{a}"', f'"/ui/{a}?v={v}"')
+    return HTMLResponse(html)
 
 
 # UI settings persisted server-side so they survive across cloudflared URLs
