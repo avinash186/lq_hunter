@@ -117,12 +117,17 @@ def live_score(symbol: str, df: pd.DataFrame, partner_pos: float = 0.0) -> dict:
     Builds base features over the window, scores the last row. ~150ms for ~120d.
     Returns p_up/p_conf/side/fire plus pos_in_bracket (to feed the partner symbol)."""
     from src import dataset
-    from src.features import technical, brackets
+    from src.features import technical, brackets, fvg, structure, engineered
     tick = config.TICK_SIZE.get(symbol.upper(), 0.25)
     tech = technical.build(df)
     bk = brackets.build(df, tick=tick)
     geo = dataset._geometry(df, bk, tech["atr_slow"])
-    feat = pd.concat([geo, tech], axis=1).iloc[[-1]].copy()
+    # mirror dataset.build_symbol EXACTLY (train/serve parity) so any registered model —
+    # base, full (fvg/structure), or engineered — scores live with identical features.
+    fv = fvg.build(df, tech["atr_fast"])
+    st = structure.build(df, tech["atr_slow"], symbol, tick=tick)
+    eng = engineered.build(df, tech["atr_fast"], tech["atr_slow"])
+    feat = pd.concat([geo, tech, fv, st, eng], axis=1).iloc[[-1]].copy()
     feat["partner_pos_in_bracket"] = float(partner_pos)
     sid = dataset._SYMBOL_ID.get(symbol.upper(), 0)
     feat["symbol_id"] = sid
