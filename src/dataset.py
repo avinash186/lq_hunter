@@ -16,7 +16,7 @@ import pandas as pd
 
 import config
 from src import data_loader, labeling, liquidity
-from src.features import brackets, technical, fvg, structure
+from src.features import brackets, technical, fvg, structure, engineered
 
 # Stationary features only — explicit whitelist (no absolute price / ATR).
 # BASE_FEATURES = the original v1/v2 set (geometry + momentum + vwap + session + SMT).
@@ -62,6 +62,7 @@ NEW_FEATURES = [
 ]
 
 FEATURE_COLS = BASE_FEATURES + NEW_FEATURES
+ENG_FEATURES = engineered.ENGINEERED          # branch model-improvement: new engineered set
 
 # Directional-label barrier width (× atr_fast). k≈1.5 balances edge strength
 # (decays as barriers widen) against cost survivability (research/k-sweep).
@@ -113,10 +114,11 @@ def build_symbol(symbol: str, tick: float | None = None) -> pd.DataFrame:
     geo = _geometry(df, bk, tech["atr_slow"])
     fv = fvg.build(df, tech["atr_fast"])
     st = structure.build(df, tech["atr_slow"], symbol, tick=tick)
+    eng = engineered.build(df, tech["atr_fast"], tech["atr_slow"])   # branch: new engineered features
     lab = labeling.build(df, bk)
     dlab = labeling.build_directional(df, tech["atr_fast"], k=DIR_K)
 
-    m = pd.concat([geo, tech, fv, st, lab, dlab], axis=1)
+    m = pd.concat([geo, tech, fv, st, eng, lab, dlab], axis=1)
     m["symbol_id"] = _SYMBOL_ID.get(symbol.upper(), 0)
     m["ts"] = brackets._epoch_secs(df.index)
     m["symbol"] = symbol.upper()
