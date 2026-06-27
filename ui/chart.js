@@ -482,13 +482,13 @@
       scheduleMid();
     } else if (ev.e === 'reconciled') { scheduleLvFetch(); scheduleMid(); }
     else if (ev.e === 'model_score') applyScore(ev);
-    else if (ev.e === 'trade_open') { liveTrade = ev; redrawLevels(); }
+    else if (ev.e === 'trade_open') { liveTrade = ev; updateScoreMarkers(); redrawLevels(); }
     else if (ev.e === 'trade_close') {
       liveTrade = null;
       if (TRADES.variant === 'lq') {            // the live engine trades the LQ exit
         tradesData.push(ev); eqTrades.push(ev); renderEquity();
       }
-      redrawLevels();
+      updateScoreMarkers(); redrawLevels();
     }
     if (liveTrade && ev.e === 'bar_close') redrawLevels();   // extend the open box each bar
   }
@@ -657,7 +657,7 @@
       scoreData = d.scores || [];
       if (d.gate) { scoreGate = d.gate; updateThrLabels(); }
       scoreCache = { key: skey, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
-      updateScoreMarkers(); redrawLevels();
+      redrawLevels();                   // band/columns redraw here; arrows are trade-driven
     }).catch(function () {});
   }
   // ─────────────── trades (liquidity-level exit + MNQ sizing) ───────────────
@@ -677,7 +677,8 @@
   function scheduleTradesFetch() { clearTimeout(tradesFetchT); tradesFetchT = setTimeout(maybeFetchTrades, 300); }
   function maybeFetchTrades() {
     if (!TRADES.on || S.tf !== '1m' || !bars.length || !candle) {
-      tradesData = []; tradesCache = { key: null, from: 0, to: 0 }; redrawLevels(); return;
+      tradesData = []; tradesCache = { key: null, from: 0, to: 0 };
+      if (candle) candle.setMarkers([]); redrawLevels(); return;
     }
     var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
     var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
@@ -692,6 +693,7 @@
       if (my !== tradesReq) return;
       tradesData = d.trades || [];
       tradesCache = { key: key, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
+      updateScoreMarkers();             // arrows = trade entries (1:1 with the boxes)
       redrawLevels();
     }).catch(function () {});
   }
@@ -860,16 +862,22 @@
         + ' · maxDD ' + p + (usd ? dd.toFixed(0) : dd.toFixed(1))
       : 'no trades';
   }
+  // Candle arrows mark ACTUAL TRADE ENTRIES (1:1 with the PnL boxes) — NOT every raw fire.
+  // Most fires never trade (one-position-at-a-time: a fire while already in a trade, or in
+  // the 16:10-18:00 window, is skipped — same as live). The raw fire signal still shows as
+  // columns in the score band below; the arrows + boxes are the trades actually taken.
   function updateScoreMarkers() {
     if (!candle) return;
-    if (!SCORE.on || S.tf !== '1m' || !bars.length) { candle.setMarkers([]); return; }
+    if (!TRADES.on || S.tf !== '1m' || !bars.length) { candle.setMarkers([]); return; }
     var lo = bars[0].time, hi = bars[bars.length - 1].time, mk = [];
-    for (var i = 0; i < scoreData.length; i++) {
-      var s = scoreData[i];
-      if (!s.fire || s.time < lo || s.time > hi) continue;
-      mk.push({ time: s.time, position: s.side === 1 ? 'belowBar' : 'aboveBar',
-                color: s.side === 1 ? S.up : S.down, shape: s.side === 1 ? 'arrowUp' : 'arrowDown' });
+    function add(side, t) {
+      if (t == null || t < lo || t > hi) return;
+      mk.push({ time: t, position: side === 1 ? 'belowBar' : 'aboveBar',
+                color: side === 1 ? S.up : S.down, shape: side === 1 ? 'arrowUp' : 'arrowDown' });
     }
+    for (var i = 0; i < tradesData.length; i++) add(tradesData[i].side, tradesData[i].entry_ts);
+    if (liveTrade) add(liveTrade.side, liveTrade.entry_ts != null ? liveTrade.entry_ts : liveTrade.time);
+    mk.sort(function (a, b) { return a.time - b.time; });   // markers must be time-sorted
     candle.setMarkers(mk);
   }
   function applyScore(ev) {
@@ -880,7 +888,7 @@
     var i = scoreData.length - 1;
     for (; i >= 0; i--) if (scoreData[i].time === ev.time) break;
     if (i >= 0) scoreData[i] = row; else scoreData.push(row);
-    updateScoreMarkers(); redrawLevels();
+    redrawLevels();                     // live score updates the band; arrows come from trades
   }
   function lineDash(style) { return style === 'dotted' ? [2, 3] : style === 'dashed' ? [6, 4] : []; }
   function niceTicks(lo, hi) {
@@ -966,7 +974,7 @@
         b.classList.toggle('active', SCORE.on);
         applyScoreLayout();
         if (SCORE.on) maybeFetchScores();
-        else { if (candle) candle.setMarkers([]); scoreData = []; scoreCache = { key: null, from: 0, to: 0 }; positionScoreAxis(); redrawLevels(); }
+        else { scoreData = []; scoreCache = { key: null, from: 0, to: 0 }; updateScoreMarkers(); positionScoreAxis(); redrawLevels(); }   // keep trade arrows when Sig is off
       };
     }
     applyLegendOpacity(); wireScoreAxis(); wireScoreNav(); wireScoreSettings();
