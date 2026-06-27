@@ -376,8 +376,10 @@ def trade_list(symbol: str, frm: int | None = Query(None, alias="from"),
     symbol = symbol.upper()
     if symbol not in config.SYMBOLS:
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
-    t = (trades.load_for_model(symbol, model, variant, frm, to, oos=bool(oos)) if model
-         else trades.load(symbol, variant, frm, to, oos=bool(oos)))
+    # ALWAYS route through load_for_model: blank/'live' -> the active model (so the chart's
+    # "Live model" shows what's switched on, not production), 'production' -> the prod store,
+    # any name -> that model's per-model store.
+    t = trades.load_for_model(symbol, model, variant, frm, to, oos=bool(oos))
     out = [{"entry_ts": int(r.entry_ts), "exit_ts": int(r.exit_ts), "side": int(r.side),
             "entry": float(r.entry), "tp": float(r.tp), "sl": float(r.sl),
             "sl_pts": float(r.sl_pts), "contracts": int(r.contracts),
