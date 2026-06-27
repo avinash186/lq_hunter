@@ -752,6 +752,14 @@
         tradesCache = { key: null, from: 0, to: 0 }; scheduleTradesFetch(); loadEquity();
       };
     }
+    var vsel = $('cx-trade-variant');           // exit style (lq/atr) — restored as its own control
+    if (vsel) {
+      vsel.value = TRADES.variant;
+      vsel.onchange = function () {
+        TRADES.variant = this.value; saveTrades();
+        tradesCache = { key: null, from: 0, to: 0 }; scheduleTradesFetch(); loadEquity();
+      };
+    }
     var w = $('cx-tr-winop'), l = $('cx-tr-lossop');
     if (w) { w.value = TRADES.winOp; $('cx-tr-winop-val').textContent = TRADES.winOp + '%';
       w.oninput = function () { TRADES.winOp = +this.value; $('cx-tr-winop-val').textContent = TRADES.winOp + '%'; saveTrades(); redrawLevels(); }; }

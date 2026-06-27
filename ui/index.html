@@ -80,6 +80,10 @@
           <select id="cx-trade-model" class="cx-model-sel" title="View a model's historical trades (does NOT change the live model — set that on Lab &rarr; Models)">
             <option value="">Live model</option>
           </select>
+          <select id="cx-trade-variant" class="cx-model-sel" title="Exit style for plotted trades: LQ = liquidity-level exits (what trades live); ATR = symmetric &plusmn;1.5 ATR">
+            <option value="lq">LQ exit</option>
+            <option value="atr">ATR exit</option>
+          </select>
           <button class="cx-tool active" id="cx-vol-toggle" title="Toggle volume">Vol</button>
           <button class="cx-tool" id="cx-fullscreen" title="Fullscreen">&#9974;</button>
           <button class="cx-tool" id="cx-settings-btn" title="Chart settings">&#9881;</button>

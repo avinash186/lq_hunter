@@ -275,10 +275,13 @@ def scores(symbol: str, frm: int | None = Query(None, alias="from"),
 
 
 def _model_stats(name: str) -> dict:
-    """In-sample + OOS metrics for a model from its trades store (production = NQ/lq),
-    incl. Deflated Sharpe and the IS-OOS win gap (an overfit tell). n_trials reflects the
-    exit-variant search."""
+    """IS + OOS metrics for the PRODUCTION model from its NQ/lq trades store (incl. Deflated
+    Sharpe + IS-OOS win gap). Per-model metrics for registry challengers are computed at
+    retrain (shadow_live.backtest_metrics) and cached in the manifest — NOT here — so a
+    challenger never borrows production's numbers; if uncached it simply shows blank."""
     from src import metrics
+    if name != registry.PROD:
+        return {}
     res: dict = {}
     for oos in (False, True):
         t = trades.load("NQ", "lq", oos=oos)

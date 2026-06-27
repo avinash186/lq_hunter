@@ -590,7 +590,7 @@ class LiveEngine:
         """Fri 17:02 ET: fork the live model, retrain a challenger, refresh shadow trades,
         and (if AUTO_PROMOTE) promote a challenger that beats the live model on >=100
         shadow trades. A retrain NEVER changes the live model directly."""
-        from src import retrain, shadow, shadow_live
+        from src import retrain, registry, shadow, shadow_live
         while not self._stop:
             now = retrain._et_now()
             if self._sleep_until_stop((retrain.next_retrain_dt(now) - now).total_seconds()):
@@ -599,6 +599,10 @@ class LiveEngine:
                 res = retrain.retrain_from_live()
                 log.info("live: weekly retrain registered challenger %s (parent %s)",
                          res["name"], res["parent"])
+                try:                                          # cache the challenger's own IS metrics
+                    registry.update_manifest(res["name"], metrics=shadow_live.backtest_metrics(res["name"]))
+                except Exception:
+                    log.exception("live: per-model metric backtest failed (continuing)")
                 if notify.configured():
                     notify.send(f"🧪 Weekly retrain: registered challenger {res['name']} "
                                 f"(forked from live {res['parent']})")

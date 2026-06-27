@@ -68,6 +68,47 @@ def score_fires(d: pd.DataFrame, model_dir: str):
     return score.score(d, d["dir_risk"].to_numpy(), d["symbol_id"].to_numpy(), model_dir=model_dir)
 
 
+def metrics_block(trades_df, n_trials: int = 1) -> dict:
+    """Financial summary (UI 'is'/'oos' block shape) from a trade list. Pure → testable."""
+    from src import metrics
+    if trades_df is None or trades_df.empty:
+        return {"trades": 0}
+    r = trades_df["R"].to_numpy(float)
+    fin = metrics.financial(r, trades_df["entry_ts"].to_numpy())
+    sk = float(pd.Series(r).skew()) if len(r) > 2 else 0.0
+    ku = float(pd.Series(r).kurt() + 3) if len(r) > 2 else 3.0
+    dsr = metrics.deflated_sharpe(fin.get("sharpe_per_trade", float("nan")),
+                                  max(int(n_trials), 1), len(r), sk, ku)
+    return {"trades": fin["trades"], "win": fin.get("win_rate"), "pf": fin.get("profit_factor"),
+            "sharpe": fin.get("sharpe_annual"), "maxdd_R": fin.get("max_drawdown_R"),
+            "total_usd": float(trades_df["pnl_usd"].sum()), "dsr": dsr}
+
+
+def backtest_metrics(name: str, symbols=None, assembled=None, variant: str = "lq") -> dict:
+    """A model's full-history IN-SAMPLE backtest, computed via the EXACT production path
+    (assemble -> score(model_dir) -> trades.build). Returns {'is': {...}}. A model trained
+    on all data has no honest walk-forward OOS here — its out-of-sample evidence is the
+    forward shadow trades — so only the IS block is filled; cache it in the manifest."""
+    from src import dataset, signals
+    symbols = symbols or config.TRADE_SYMBOLS
+    d = dataset.assemble(("NQ", "ES")) if assembled is None else assembled
+    d = d[d["pos_in_bracket"].notna()].reset_index(drop=True)
+    sc = score_fires(d, str(registry.model_dir(name)))
+    ets = signals._to_etnaive(d["ts"])
+    frames = []
+    for s in symbols:
+        mask = (d["symbol"] == s).to_numpy()
+        fires = pd.DataFrame({"ts": ets[mask], "side": sc["side"].to_numpy()[mask],
+                              "fire": sc["fire"].to_numpy()[mask]})
+        fires = fires[fires["fire"]][["ts", "side"]].sort_values("ts")
+        if not fires.empty:
+            frames.append(trades.build(s, variant, fires=fires))
+    if not frames:
+        return {"is": {"trades": 0}}
+    tl = pd.concat(frames, ignore_index=True)
+    return {"is": metrics_block(tl, registry.trial_n())}
+
+
 def update_challengers(symbols) -> dict:
     """Refresh shadow trades for every pending challenger (assemble once, reuse). Returns
     {name: appended}."""

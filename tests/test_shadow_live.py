@@ -86,6 +86,25 @@ def test_score_uses_active_when_no_model_dir():
         score._load_dir, score._load = orig
 
 
+# ── per-model metrics block ──
+def test_metrics_block_summary():
+    df = pd.DataFrame({
+        "entry_ts": np.arange(10) * 600, "exit_ts": np.arange(10) * 600 + 300,
+        "R": [1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0],   # 7W/3L
+        "pnl_usd": [150, -150, 150, 150, -150, 150, 150, -150, 150, 150],
+    })
+    b = shadow_live.metrics_block(df, n_trials=2)
+    assert b["trades"] == 10
+    assert abs(b["win"] - 0.7) < 1e-9
+    assert abs(b["pf"] - (7.0 / 3.0)) < 1e-9
+    assert b["total_usd"] == 600
+    assert "dsr" in b and "maxdd_R" in b
+
+
+def test_metrics_block_empty():
+    assert shadow_live.metrics_block(pd.DataFrame()) == {"trades": 0}
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
