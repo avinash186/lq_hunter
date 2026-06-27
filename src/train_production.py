@@ -30,13 +30,15 @@ CAT = [c for c in CATEGORICAL if c in BASE_FEATURES]
 CALIB_FRAC = 0.2   # tail of resolved data held out to fit the calibrator + best_q
 
 
-def run(out_dir=None):
+def run(out_dir=None, features=None):
     """Train on all data and persist the 4 artifacts. ``out_dir`` (default data/models/)
     lets the weekly retrain write into a CHALLENGER directory without ever overwriting the
     live production model."""
     from pathlib import Path
     out = Path(out_dir) if out_dir is not None else MODELS
     out.mkdir(parents=True, exist_ok=True)
+    feats = list(features) if features is not None else BASE_FEATURES
+    cat = [c for c in CATEGORICAL if c in feats]
     print("assembling matrix ...", flush=True)
     d = dataset.assemble(config.SYMBOLS)
     d = d[d["dir_label"].notna()].sort_values("ts", kind="stable").reset_index(drop=True)
@@ -48,21 +50,21 @@ def run(out_dir=None):
 
     # ── primary: P(up) ──
     y = (fit["dir_label"].to_numpy() == 1).astype(int)
-    primary = lgb.train(DIR_PARAMS, lgb.Dataset(_prep_X(fit, BASE_FEATURES), label=y,
-                        categorical_feature=CAT, free_raw_data=False), DIR_ROUNDS)
+    primary = lgb.train(DIR_PARAMS, lgb.Dataset(_prep_X(fit, feats), label=y,
+                        categorical_feature=cat, free_raw_data=False), DIR_ROUNDS)
 
     # ── meta: P(primary side correct) ──
-    P_fit = np.clip(primary.predict(_prep_X(fit, BASE_FEATURES)), 1e-6, 1 - 1e-6)
+    P_fit = np.clip(primary.predict(_prep_X(fit, feats)), 1e-6, 1 - 1e-6)
     side_fit = (P_fit >= 0.5).astype(int)
     meta_y = (side_fit == y).astype(int)
-    Xm = _prep_X(fit, BASE_FEATURES).copy()
+    Xm = _prep_X(fit, feats).copy()
     Xm["_pP"] = P_fit; Xm["_pConf"] = np.abs(P_fit - 0.5)
-    meta = lgb.train(DIR_PARAMS, lgb.Dataset(Xm, label=meta_y, categorical_feature=CAT,
+    meta = lgb.train(DIR_PARAMS, lgb.Dataset(Xm, label=meta_y, categorical_feature=cat,
                      free_raw_data=False), DIR_ROUNDS)
 
     # ── calibrate meta probability + pick the gate threshold on the held-out tail ──
-    P_cal = np.clip(primary.predict(_prep_X(calib, BASE_FEATURES)), 1e-6, 1 - 1e-6)
-    Xm_cal = _prep_X(calib, BASE_FEATURES).copy()
+    P_cal = np.clip(primary.predict(_prep_X(calib, feats)), 1e-6, 1 - 1e-6)
+    Xm_cal = _prep_X(calib, feats).copy()
     Xm_cal["_pP"] = P_cal; Xm_cal["_pConf"] = np.abs(P_cal - 0.5)
     Pc_raw = meta.predict(Xm_cal)
     yc = (calib["dir_label"].to_numpy() == 1).astype(int)
@@ -90,7 +92,7 @@ def run(out_dir=None):
     with open(out / "calibrator.pkl", "wb") as f:
         pickle.dump(iso, f)
     cfg = {
-        "features": BASE_FEATURES, "categorical": CAT, "k": DIR_K,
+        "features": feats, "categorical": cat, "k": DIR_K,
         "cost_max_r": COST_MAX_R, "cost_ticks": COST_TICKS,
         "best_q": float(best_q), "calib_expectancy_R": float(best_e),
         "trained_through": int(d["ts"].max()),
