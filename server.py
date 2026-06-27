@@ -40,8 +40,8 @@ async def _no_cache_ui(request, call_next):
     (e.g. signals/trades looking 'swapped' across models)."""
     resp = await call_next(request)
     p = request.url.path
-    if p == "/" or p.startswith("/ui"):
-        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    if p == "/" or p.startswith("/ui") or p.startswith("/api"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
 
 
@@ -300,7 +300,9 @@ def scores(symbol: str, frm: int | None = Query(None, alias="from"),
     df = signals.load_for_model(symbol, model, frm, to)
     out = [{"time": int(r.ts), "p_up": float(r.p_up), "side": int(r.side), "fire": bool(r.fire)}
            for r in df.itertuples()]
-    return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol, model)})
+    resolved = registry.active_name() if (not model or model == "live") else model
+    return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol, model),
+                         "model": resolved})
 
 
 def _model_stats(name: str) -> dict:
@@ -414,7 +416,8 @@ def trade_list(symbol: str, frm: int | None = Query(None, alias="from"),
             "sl_pts": float(r.sl_pts), "contracts": int(r.contracts),
             "risk_usd": float(r.risk_usd), "R": float(r.R), "pnl_usd": float(r.pnl_usd),
             "outcome": str(r.outcome)} for r in t.itertuples()]
-    return JSONResponse({"symbol": symbol, "trades": out})
+    resolved = registry.active_name() if (not model or model == "live") else model
+    return JSONResponse({"symbol": symbol, "trades": out, "model": resolved})
 
 
 _GATE: dict = {}
