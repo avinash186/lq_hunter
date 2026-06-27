@@ -109,6 +109,20 @@ def backtest_metrics(name: str, symbols=None, assembled=None, variant: str = "lq
     return {"is": metrics_block(tl, registry.trial_n())}
 
 
+def cache_metrics(name: str) -> dict:
+    """Compute a model's full IS backtest + walk-forward OOS (+ DSR via metrics_block, +
+    IS-OOS win gap) and cache them in its manifest so the Models page shows everything —
+    just like production. Heavy (assemble + walk-forward); called at retrain / backfill."""
+    from src import walkforward
+    is_b = backtest_metrics(name).get("is", {"trades": 0})
+    oos_b = walkforward.run_for_model(name)
+    m = {"is": is_b, "oos": oos_b}
+    if is_b.get("win") is not None and oos_b.get("win") is not None:
+        m["is_oos_gap"] = float(is_b["win"] - oos_b["win"])
+    registry.update_manifest(name, metrics=m)
+    return m
+
+
 def update_challengers(symbols) -> dict:
     """Refresh shadow trades for every pending challenger (assemble once, reuse). Returns
     {name: appended}."""

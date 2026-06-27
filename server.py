@@ -376,7 +376,7 @@ def trade_list(symbol: str, frm: int | None = Query(None, alias="from"),
     symbol = symbol.upper()
     if symbol not in config.SYMBOLS:
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
-    t = (trades.load_for_model(symbol, model, variant, frm, to) if model
+    t = (trades.load_for_model(symbol, model, variant, frm, to, oos=bool(oos)) if model
          else trades.load(symbol, variant, frm, to, oos=bool(oos)))
     out = [{"entry_ts": int(r.entry_ts), "exit_ts": int(r.exit_ts), "side": int(r.side),
             "entry": float(r.entry), "tp": float(r.tp), "sl": float(r.sl),

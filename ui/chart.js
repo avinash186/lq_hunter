@@ -828,6 +828,7 @@
     if (!eqSeries) return;
     var u = new URL('/api/trades/' + S.sym, location.origin);
     u.searchParams.set('variant', TRADES.variant); u.searchParams.set('oos', EQ.oos ? '1' : '0');
+    if (TRADES.model) u.searchParams.set('model', TRADES.model);   // equity curve follows the viewed model (incl. its OOS)
     fetch(u).then(function (r) { return r.json(); }).then(function (d) { eqTrades = d.trades || []; renderEquity(); }).catch(function () {});
   }
   function renderEquity() {

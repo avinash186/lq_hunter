@@ -79,6 +79,19 @@ def test_view_unknown_model_is_empty_not_error():
         assert t.empty
 
 
+def test_view_model_oos_reads_per_model_oos_store():
+    with tmp_registry():
+        _register("wk1")
+        rows = [{"entry_ts": 1, "exit_ts": 2, "side": 1, "entry": 1.0, "tp": 2.0, "sl": 0.5,
+                 "sl_pts": 5.0, "contracts": 1, "risk_usd": 10.0, "R": 1.0, "pnl_usd": 10.0,
+                 "outcome": "tp"}]
+        from src import registry as _r
+        pd.DataFrame(rows).to_parquet(_r.model_dir("wk1") / "oos_trades_nq.parquet", index=False)
+        oos = trades.load_for_model("NQ", "wk1", oos=True)
+        assert len(oos) == 1 and oos.iloc[0]["outcome"] == "tp"
+        assert trades.load_for_model("NQ", "wk1", oos=False).empty   # shadow store still empty
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

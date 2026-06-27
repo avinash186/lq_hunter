@@ -599,8 +599,8 @@ class LiveEngine:
                 res = retrain.retrain_from_live()
                 log.info("live: weekly retrain registered challenger %s (parent %s)",
                          res["name"], res["parent"])
-                try:                                          # cache the challenger's own IS metrics
-                    registry.update_manifest(res["name"], metrics=shadow_live.backtest_metrics(res["name"]))
+                try:                                          # cache the challenger's own IS + OOS metrics
+                    shadow_live.cache_metrics(res["name"])
                 except Exception:
                     log.exception("live: per-model metric backtest failed (continuing)")
                 if notify.configured():
