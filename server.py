@@ -303,6 +303,7 @@ def models_list():
     """Registry models for the Lab Models page. Each: manifest fields + active flag +
     metrics (from the manifest if trained in the lab, else computed from the trades store
     for the production model)."""
+    from src import metrics, shadow
     out = []
     for m in registry.list_models():
         if "metrics" not in m:
@@ -310,8 +311,19 @@ def models_list():
                 m["metrics"] = _model_stats(m["name"])
             except Exception:
                 m["metrics"] = {}
+        try:                                            # shadow progress (challengers)
+            sc = shadow.load_shadow(m["name"])
+            if len(sc):
+                r = sc["R"].to_numpy()
+                fin = metrics.financial(r, sc["entry_ts"].to_numpy())
+                m["shadow"] = {"trades": int(len(sc)), "win": fin.get("win_rate"),
+                               "pf": fin.get("profit_factor"),
+                               "total_usd": float(sc["pnl_usd"].sum())}
+        except Exception:
+            pass
         out.append(m)
-    return JSONResponse({"models": out, "active": registry.active_name()})
+    return JSONResponse({"models": out, "active": registry.active_name(),
+                         "trial_n": registry.trial_n()})
 
 
 @app.post("/api/models/{name}/activate")
@@ -349,15 +361,20 @@ def lab_ws_del(name: str):
 
 @app.get("/api/trades/{symbol}")
 def trade_list(symbol: str, frm: int | None = Query(None, alias="from"),
-               to: int | None = Query(None), variant: str = "lq", oos: int = 0):
+               to: int | None = Query(None), variant: str = "lq", oos: int = 0,
+               model: str = ""):
     """One-position-at-a-time trades overlapping [from, to]. ``variant`` selects the
     exit: 'lq' (liquidity levels) or 'atr' (base ±1.5·ATR). ``oos=1`` returns the
-    walk-forward OUT-OF-SAMPLE trades (no in-sample leakage). Each: {entry_ts, exit_ts,
-    side, entry, tp, sl, sl_pts, contracts, risk_usd, R, pnl_usd, outcome}."""
+    walk-forward OUT-OF-SAMPLE trades (no in-sample leakage). ``model`` selects WHICH
+    registry model's historical trades to VIEW (blank/'production' = the live store; a
+    challenger name = its shadow trades) — viewing NEVER changes the live model. Each:
+    {entry_ts, exit_ts, side, entry, tp, sl, sl_pts, contracts, risk_usd, R, pnl_usd,
+    outcome}."""
     symbol = symbol.upper()
     if symbol not in config.SYMBOLS:
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
-    t = trades.load(symbol, variant, frm, to, oos=bool(oos))
+    t = (trades.load_for_model(symbol, model, variant, frm, to) if model
+         else trades.load(symbol, variant, frm, to, oos=bool(oos)))
     out = [{"entry_ts": int(r.entry_ts), "exit_ts": int(r.exit_ts), "side": int(r.side),
             "entry": float(r.entry), "tp": float(r.tp), "sl": float(r.sl),
             "sl_pts": float(r.sl_pts), "contracts": int(r.contracts),

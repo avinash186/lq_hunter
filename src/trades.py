@@ -196,6 +196,25 @@ def load(symbol, variant="lq", frm=None, to=None, oos=False):
     return t.sort_values("entry_ts")
 
 
+def load_for_model(symbol, model_name=None, variant="lq", frm=None, to=None):
+    """Trades to DISPLAY for a registry model (view-only — never affects the live model).
+    'production'/'live'/blank -> the production backtest + live store; any other registered
+    model -> the trades IT took in shadow (data/models/<name>/shadow_trades.parquet)."""
+    from src import registry
+    name = (model_name or "").strip()
+    if not name or name in (registry.PROD, "live"):
+        return load(symbol, variant, frm, to)
+    from src import shadow
+    t = shadow.load_shadow(name)
+    if t.empty:
+        return t
+    if frm is not None:
+        t = t[t["exit_ts"] >= int(frm)]
+    if to is not None:
+        t = t[t["entry_ts"] <= int(to)]
+    return t.sort_values("entry_ts")
+
+
 def _validate(t, label):
     if t.empty:
         print(f"  {label}: no trades"); return

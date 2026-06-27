@@ -662,9 +662,10 @@
   // TradingView-style position boxes from /api/trades: target zone (entry->TP) green,
   // stop zone (entry->SL) red, spanning entry->exit time. One position at a time.
   var TRADES = (function () {
-    var d = { on: true, variant: 'lq', winOp: 50, lossOp: 35 };
+    // model: '' = the LIVE model's trades; any registry name = that model's history (VIEW only).
+    var d = { on: true, variant: 'lq', model: '', winOp: 50, lossOp: 35 };
     var s = JSON.parse(localStorage.getItem('cxtrades') || 'null');
-    if (s) { d.on = s.on !== false; if (s.variant) d.variant = s.variant;
+    if (s) { d.on = s.on !== false; if (s.variant) d.variant = s.variant; if (s.model) d.model = s.model;
       if (s.winOp != null) d.winOp = s.winOp; if (s.lossOp != null) d.lossOp = s.lossOp; }
     return d;
   })();
@@ -678,12 +679,13 @@
     }
     var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
     var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
-    var key = S.sym + ':' + TRADES.variant;
+    var key = S.sym + ':' + TRADES.variant + ':' + (TRADES.model || 'live');
     if (key === tradesCache.key && vfrom >= tradesCache.from && vto <= tradesCache.to) return;
     var pad = Math.max(vto - vfrom, 7200), my = ++tradesReq;
     var u = new URL('/api/trades/' + S.sym, location.origin);
     u.searchParams.set('from', Math.floor(vfrom - pad)); u.searchParams.set('to', Math.ceil(vto + pad));
     u.searchParams.set('variant', TRADES.variant);
+    if (TRADES.model) u.searchParams.set('model', TRADES.model);   // VIEW a model's history; live model unchanged
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       if (my !== tradesReq) return;
       tradesData = d.trades || [];
@@ -732,8 +734,23 @@
     }
     var sel = $('cx-trade-model');
     if (sel) {
-      sel.value = TRADES.variant;
-      sel.onchange = function () { TRADES.variant = this.value; saveTrades(); tradesCache = { key: null, from: 0, to: 0 }; scheduleTradesFetch(); loadEquity(); };
+      // Populate with registry models. Selecting one only CHANGES THE VIEW (historical
+      // trades drawn) — it never switches the live model (that is the Models page "Set live").
+      fetch('/api/models').then(function (r) { return r.json(); }).then(function (d) {
+        var ms = (d && d.models) || [], live = (d && d.active) || 'production';
+        var opts = '<option value="">Live model (' + live + ')</option>';
+        ms.forEach(function (m) {
+          if (m.name === 'production' || m.live) return;          // 'Live model' already covers the active one
+          var tag = m.status ? ' [' + m.status + ']' : '';
+          opts += '<option value="' + m.name + '">' + m.name + tag + '</option>';
+        });
+        sel.innerHTML = opts;
+        sel.value = TRADES.model || '';
+      }).catch(function () {});
+      sel.onchange = function () {
+        TRADES.model = this.value; saveTrades();
+        tradesCache = { key: null, from: 0, to: 0 }; scheduleTradesFetch(); loadEquity();
+      };
     }
     var w = $('cx-tr-winop'), l = $('cx-tr-lossop');
     if (w) { w.value = TRADES.winOp; $('cx-tr-winop-val').textContent = TRADES.winOp + '%';
