@@ -53,16 +53,30 @@ def path_live(symbol, variant="lq"):     # live trades closed this session (appe
     return TR_DIR / f"trades_{symbol.lower()}_{variant}_live.parquet"
 
 
-def append(symbol, rec, variant="lq"):
-    """Append one closed live trade to the live file (dedup on entry_ts, newest wins)."""
+_LIVE_COLS = {**_COLS, "model": "object"}    # live trades tagged with the model that took them
+
+
+def load_live(symbol, variant="lq"):
+    """The append-only LIVE trade file with a 'model' tag (legacy rows -> 'production')."""
+    p = path_live(symbol, variant)
+    if not p.exists():
+        return pd.DataFrame(columns=list(_LIVE_COLS))
+    df = pd.read_parquet(p)
+    if "model" not in df.columns:
+        df["model"] = "production"
+    return df
+
+
+def append(symbol, rec, variant="lq", model=None):
+    """Append one closed live trade to the live file (dedup on entry_ts, newest wins), TAGGED
+    with the live model that took it (defaults to the active model) for clean per-model views."""
+    from src import registry
     TR_DIR.mkdir(exist_ok=True)
     p = path_live(symbol, variant)
-    new = pd.DataFrame([rec]).astype(_COLS)
-    if p.exists():
-        old = pd.read_parquet(p)
-        out = pd.concat([old[old["entry_ts"] != rec["entry_ts"]], new], ignore_index=True)
-    else:
-        out = new
+    rec = dict(rec); rec["model"] = model or registry.active_name()
+    new = pd.DataFrame([rec]).astype(_LIVE_COLS)
+    old = load_live(symbol, variant)
+    out = pd.concat([old[old["entry_ts"] != rec["entry_ts"]], new], ignore_index=True) if not old.empty else new
     out.sort_values("entry_ts").to_parquet(p, index=False)
 
 
@@ -198,26 +212,41 @@ def load(symbol, variant="lq", frm=None, to=None, oos=False):
 
 def load_for_model(symbol, model_name=None, variant="lq", frm=None, to=None, oos=False):
     """Trades to DISPLAY for a registry model (view-only — never affects the live model).
-    'production'/'live'/blank -> the production backtest + live store; any other registered
-    model -> its walk-forward OOS trades (oos=1, data/models/<name>/oos_trades_*.parquet)
-    or the trades it took in shadow (shadow_trades.parquet)."""
+    Lets the UI compare what each model traded. Resolution:
+      blank / 'live'  -> the CURRENT live model (so the chart follows what is switched on);
+      'production'    -> the production backtest + live store;
+      any other model -> its per-model IS backtest (data/models/<name>/trades_*.parquet) or
+                         walk-forward OOS (oos=1, oos_trades_*.parquet)."""
     from src import registry
     name = (model_name or "").strip()
-    if not name or name in (registry.PROD, "live"):
-        return load(symbol, variant, frm, to, oos=oos)
+    if not name or name == "live":
+        name = registry.active_name()                # 'Live model' = whatever is switched on
+    # base backtest (NO live): production -> prod store; any other -> its per-model store
     if oos:
-        p = registry.model_dir(name) / f"oos_trades_{symbol.lower()}.parquet"
-        t = pd.read_parquet(p) if p.exists() else pd.DataFrame(columns=list(_COLS))
+        base = (_read_or_empty(path(symbol, variant, oos=True)) if name == registry.PROD
+                else _read_or_empty(registry.model_dir(name) / f"oos_trades_{symbol.lower()}.parquet"))
+    elif name == registry.PROD:
+        base = _read_or_empty(path(symbol, variant))             # prod static backtest, sans live
     else:
-        from src import shadow
-        t = shadow.load_shadow(name)
-    if t.empty:
-        return t
+        base = _read_or_empty(registry.model_dir(name) / f"trades_{symbol.lower()}.parquet")
+    parts = [base[list(_COLS)]] if not base.empty else []
+    if not oos:                                                  # attach ONLY this model's live trades
+        live = load_live(symbol, variant)
+        live = live[live["model"] == name] if not live.empty else live
+        if not live.empty:
+            parts.append(live[list(_COLS)])
+    if not parts:
+        return pd.DataFrame(columns=list(_COLS))
+    t = pd.concat(parts, ignore_index=True).drop_duplicates("entry_ts", keep="last")
     if frm is not None:
         t = t[t["exit_ts"] >= int(frm)]
     if to is not None:
         t = t[t["entry_ts"] <= int(to)]
     return t.sort_values("entry_ts")
+
+
+def _read_or_empty(p):
+    return pd.read_parquet(p) if p.exists() else pd.DataFrame(columns=list(_COLS))
 
 
 def _validate(t, label):

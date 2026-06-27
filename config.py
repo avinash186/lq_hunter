@@ -58,6 +58,13 @@ EXEC_POINT_VALUE = {"NQ": 2.0, "ES": 5.0}
 # weak / overfit-prone (docs/research_exit_strategy.md). Others are still scored/charted.
 TRADE_SYMBOLS = [s.strip().upper() for s in os.getenv("TRADE_SYMBOLS", "NQ").split(",") if s.strip()]
 
+# ── Cost filter (model-improvement) ──
+# How the fire cost-gate measures cost. 'atr' (default) = cost vs the ±1.5*ATR stop (the
+# legacy behavior); 'lq' = cost vs the REAL liquidity-level stop the trade actually uses.
+# The ATR mode is mis-specified (it rejects 74% of confident signals in low vol because the
+# absolute-ATR stop is non-stationary); 'lq' OOS-validated at ~2x trades/return, same win.
+COST_MODE = os.getenv("COST_MODE", "atr").strip().lower()
+
 # ── Weekly retrain (Lab) ──
 # Every Friday 17:02 ET, fork the LIVE model, retrain on the week's data, and register an
 # inert challenger. OFF by default — enable only after reviewing on the weekly-retrain branch.

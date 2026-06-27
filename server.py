@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S ET",
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 from fastapi import FastAPI, Query, WebSocket
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -30,6 +30,21 @@ from src import data_loader, fetcher, liquidity, live, signals, trades, registry
 
 app = FastAPI(title="lgbm-trader")
 app.add_middleware(GZipMiddleware, minimum_size=1024)   # compress bar payloads
+
+
+@app.middleware("http")
+async def _no_cache_ui(request, call_next):
+    """Force the browser to REVALIDATE UI assets every load (cheap 304 if unchanged, full
+    fetch when changed). Without this, browsers cache chart.js/lab.js indefinitely and serve
+    a STALE copy after a deploy — which silently mismatches the UI against the new API
+    (e.g. signals/trades looking 'swapped' across models)."""
+    resp = await call_next(request)
+    p = request.url.path
+    if p == "/" or p.startswith("/ui") or p.startswith("/api"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
 app.mount("/ui", StaticFiles(directory=config.UI_DIR), name="ui")
 
 # tf code -> (pandas resample rule, minutes-per-bar)
@@ -64,9 +79,22 @@ def _nearest_cached(symbol: str, n: int, tset, tick: float, confirm: int = 0,
     return _NEAREST[key]
 
 
+_ASSET_FILES = ("hub.css", "app.js", "chart.js", "lab.js", "labchart.js")
+
+
 @app.get("/")
 def index():
-    return FileResponse(config.UI_DIR / "index.html")
+    """Serve index.html with CONTENT-VERSIONED asset URLs (/ui/chart.js?v=<hash>). The hash
+    changes only when a file changes, so the browser AND any CDN/cloudflare edge fetch the
+    new asset automatically — no stale chart.js after a deploy, ever."""
+    import hashlib
+    html = (config.UI_DIR / "index.html").read_text(encoding="utf-8")
+    for a in _ASSET_FILES:
+        p = config.UI_DIR / a
+        if p.exists():
+            v = hashlib.md5(p.read_bytes()).hexdigest()[:10]
+            html = html.replace(f'"/ui/{a}"', f'"/ui/{a}?v={v}"')
+    return HTMLResponse(html)
 
 
 # UI settings persisted server-side so they survive across cloudflared URLs
@@ -255,23 +283,26 @@ def bars(symbol: str, tf: str = "1m", limit: int = 20000, before: int | None = N
 
 @app.get("/api/scores/{symbol}")
 def scores(symbol: str, frm: int | None = Query(None, alias="from"),
-           to: int | None = Query(None), fired: int = 0):
-    """Model signals (historical + live). Windowed by [from, to] for the chart
-    (like /api/levels). With ``fired=1`` returns only fired signals across all
-    history (just {time, side}) — used by the prev/next-signal arrows.
-    Each windowed entry: {time, p_up (0-1), side (1 long/0 short), fire (meta gate)}."""
+           to: int | None = Query(None), fired: int = 0, model: str = ""):
+    """Model signals (historical + live). Windowed by [from, to] for the chart. With
+    ``fired=1`` returns only fired signals (prev/next-signal arrows). ``model`` selects which
+    model's signals (blank/'live' = the active model; any name = that model's snapshot) — so
+    the dots/arrows/band follow the dropdown, for every model + weekly retrain.
+    Each windowed entry: {time, p_up, side, fire}."""
     symbol = symbol.upper()
     if symbol not in config.SYMBOLS:
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
     if fired:
-        df = signals.load(symbol)
+        df = signals.load_for_model(symbol, model)
         df = df[df["fire"]]
         out = [{"time": int(r.ts), "side": int(r.side)} for r in df.itertuples()]
         return JSONResponse({"symbol": symbol, "scores": out})
-    df = signals.load(symbol, frm, to)
+    df = signals.load_for_model(symbol, model, frm, to)
     out = [{"time": int(r.ts), "p_up": float(r.p_up), "side": int(r.side), "fire": bool(r.fire)}
            for r in df.itertuples()]
-    return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol)})
+    resolved = registry.active_name() if (not model or model == "live") else model
+    return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol, model),
+                         "model": resolved})
 
 
 def _model_stats(name: str) -> dict:
@@ -376,32 +407,36 @@ def trade_list(symbol: str, frm: int | None = Query(None, alias="from"),
     symbol = symbol.upper()
     if symbol not in config.SYMBOLS:
         return JSONResponse({"error": f"unknown symbol {symbol!r}"}, status_code=404)
-    t = (trades.load_for_model(symbol, model, variant, frm, to, oos=bool(oos)) if model
-         else trades.load(symbol, variant, frm, to, oos=bool(oos)))
+    # ALWAYS route through load_for_model: blank/'live' -> the active model (so the chart's
+    # "Live model" shows what's switched on, not production), 'production' -> the prod store,
+    # any name -> that model's per-model store.
+    t = trades.load_for_model(symbol, model, variant, frm, to, oos=bool(oos))
     out = [{"entry_ts": int(r.entry_ts), "exit_ts": int(r.exit_ts), "side": int(r.side),
             "entry": float(r.entry), "tp": float(r.tp), "sl": float(r.sl),
             "sl_pts": float(r.sl_pts), "contracts": int(r.contracts),
             "risk_usd": float(r.risk_usd), "R": float(r.R), "pnl_usd": float(r.pnl_usd),
             "outcome": str(r.outcome)} for r in t.itertuples()]
-    return JSONResponse({"symbol": symbol, "trades": out})
+    resolved = registry.active_name() if (not model or model == "live") else model
+    return JSONResponse({"symbol": symbol, "trades": out, "model": resolved})
 
 
 _GATE: dict = {}
 
 
-def _gate_thr(symbol: str) -> dict:
+def _gate_thr(symbol: str, model: str = "") -> dict:
     """The model's effective firing envelope in p_up terms: the (robust) lowest
     p_up among fired LONGs and highest among fired SHORTs — fixed, model-derived
-    threshold lines for the UI (not user-editable)."""
-    if symbol in _GATE:
-        return _GATE[symbol]
-    df = signals.load(symbol)
+    threshold lines for the UI (per model, so the band lines follow the dropdown)."""
+    ckey = (symbol, (model or "").strip())
+    if ckey in _GATE:
+        return _GATE[ckey]
+    df = signals.load_for_model(symbol, model)
     f = df[df["fire"]] if len(df) else df
     longs = f[f["side"] == 1]["p_up"] if len(f) else []
     shorts = f[f["side"] == 0]["p_up"] if len(f) else []
     g = {"long": float(longs.quantile(0.02)) if len(longs) else 0.5,
          "short": float(shorts.quantile(0.98)) if len(shorts) else 0.5}
-    _GATE[symbol] = g
+    _GATE[ckey] = g
     return g
 
 

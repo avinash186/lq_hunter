@@ -203,6 +203,8 @@
       }
       if (!b) b = bars[bars.length - 1];
       if (b) renderLegend(b, param && param.time);
+      var pt = param && param.point;                 // trade-box hover tooltip
+      updateTradeTip(pt ? pt.x : null, pt ? pt.y : null);
     });
 
     setupOverlayCanvas();
@@ -482,13 +484,13 @@
       scheduleMid();
     } else if (ev.e === 'reconciled') { scheduleLvFetch(); scheduleMid(); }
     else if (ev.e === 'model_score') applyScore(ev);
-    else if (ev.e === 'trade_open') { liveTrade = ev; redrawLevels(); }
+    else if (ev.e === 'trade_open') { liveTrade = ev; updateScoreMarkers(); redrawLevels(); }
     else if (ev.e === 'trade_close') {
       liveTrade = null;
       if (TRADES.variant === 'lq') {            // the live engine trades the LQ exit
         tradesData.push(ev); eqTrades.push(ev); renderEquity();
       }
-      redrawLevels();
+      updateScoreMarkers(); redrawLevels();
     }
     if (liveTrade && ev.e === 'bar_close') redrawLevels();   // extend the open box each bar
   }
@@ -646,16 +648,18 @@
     }
     var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
     var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
-    if (S.sym === scoreCache.key && vfrom >= scoreCache.from && vto <= scoreCache.to) return;
+    var skey = S.sym + ':' + (TRADES.model || 'live');     // signals follow the model dropdown
+    if (skey === scoreCache.key && vfrom >= scoreCache.from && vto <= scoreCache.to) return;
     var pad = Math.max(vto - vfrom, 7200), my = ++scoreReq;
     var u = new URL('/api/scores/' + S.sym, location.origin);
     u.searchParams.set('from', Math.floor(vfrom - pad)); u.searchParams.set('to', Math.ceil(vto + pad));
+    if (TRADES.model) u.searchParams.set('model', TRADES.model);
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       if (my !== scoreReq) return;
       scoreData = d.scores || [];
       if (d.gate) { scoreGate = d.gate; updateThrLabels(); }
-      scoreCache = { key: S.sym, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
-      updateScoreMarkers(); redrawLevels();
+      scoreCache = { key: skey, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
+      redrawLevels();                   // band/columns redraw here; arrows are trade-driven
     }).catch(function () {});
   }
   // ─────────────── trades (liquidity-level exit + MNQ sizing) ───────────────
@@ -675,7 +679,8 @@
   function scheduleTradesFetch() { clearTimeout(tradesFetchT); tradesFetchT = setTimeout(maybeFetchTrades, 300); }
   function maybeFetchTrades() {
     if (!TRADES.on || S.tf !== '1m' || !bars.length || !candle) {
-      tradesData = []; tradesCache = { key: null, from: 0, to: 0 }; redrawLevels(); return;
+      tradesData = []; tradesCache = { key: null, from: 0, to: 0 };
+      if (candle) candle.setMarkers([]); redrawLevels(); return;
     }
     var vr = chart.timeScale().getVisibleRange(); if (!vr) return;
     var vfrom = Math.floor(vr.from), vto = Math.ceil(vr.to);
@@ -690,10 +695,69 @@
       if (my !== tradesReq) return;
       tradesData = d.trades || [];
       tradesCache = { key: key, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
+      updateScoreMarkers();             // arrows = trade entries (1:1 with the boxes)
       redrawLevels();
     }).catch(function () {});
   }
+  // ── hover tooltip: trade details when the cursor is over a PnL box ──
+  var tradeBoxes = [];                          // [{x1,x2,y1,y2,t}] hit-test rects, rebuilt per draw
+  function tradeTipEl() {
+    var el = $('cx-trade-tip');
+    if (!el) {
+      el = document.createElement('div'); el.id = 'cx-trade-tip'; el.className = 'cx-trade-tip';
+      el.style.display = 'none'; $('cx-host').appendChild(el);
+    }
+    return el;
+  }
+  function fmtDur(s) {
+    var m = Math.max(0, Math.round(s / 60));
+    return m < 60 ? m + 'm' : Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  }
+  function tradeTipHTML(t) {
+    var long = t.side === 1, col = long ? S.up : S.down;
+    var tpP = Math.abs(t.tp - t.entry);
+    var slP = (t.sl_pts != null ? +t.sl_pts : Math.abs(t.sl - t.entry));
+    var rr = slP > 0 ? tpP / slP : 0;
+    var oc = t.outcome == null ? 'OPEN' : String(t.outcome).toUpperCase();
+    var pc = function (x) { return x > 0 ? S.up : x < 0 ? S.down : ''; };
+    var row = function (k, v, c) {
+      return '<div class="cx-tt-row"><span>' + k + '</span><b' +
+        (c ? ' style="color:' + c + '"' : '') + '>' + v + '</b></div>';
+    };
+    var h = '<div class="cx-tt-head" style="color:' + col + '">' +
+            (long ? '▲ LONG' : '▼ SHORT') + ' · ' + oc + '</div>';
+    h += row('Entry', (+t.entry).toFixed(2));
+    h += row('TP', (+t.tp).toFixed(2) + '  ·  ' + tpP.toFixed(1) + ' pt');
+    h += row('SL', (+t.sl).toFixed(2) + '  ·  ' + slP.toFixed(1) + ' pt');
+    h += row('R : R', rr.toFixed(2) + ' : 1');
+    if (t.R != null) h += row('Realized', (t.R >= 0 ? '+' : '') + (+t.R).toFixed(2) + ' R', pc(t.R));
+    if (t.contracts != null) h += row('Size', t.contracts + ' ' + (S.sym === 'ES' ? 'MES' : 'MNQ'));
+    if (t.risk_usd != null) h += row('Risk', '$' + (+t.risk_usd).toFixed(0));
+    if (t.pnl_usd != null) h += row('P&L', (t.pnl_usd >= 0 ? '+$' : '−$') + Math.abs(+t.pnl_usd).toFixed(0), pc(t.pnl_usd));
+    if (t.entry_ts && t.exit_ts) h += row('Held', fmtDur(t.exit_ts - t.entry_ts));
+    return h;
+  }
+  function updateTradeTip(px, py) {
+    var el = tradeTipEl();
+    if (px != null && py != null) {
+      for (var i = tradeBoxes.length - 1; i >= 0; i--) {       // topmost (last drawn) first
+        var b = tradeBoxes[i];
+        if (px >= b.x1 - 2 && px <= b.x2 + 2 && py >= b.y1 - 2 && py <= b.y2 + 2) {
+          el.innerHTML = tradeTipHTML(b.t); el.style.display = 'block';
+          var host = $('cx-host'), hw = host.clientWidth, hh = host.clientHeight;
+          var tw = el.offsetWidth, th = el.offsetHeight;
+          var lx = px + 16; if (lx + tw > hw - 4) lx = px - tw - 16;
+          var ly = py + 12; if (ly + th > hh - 4) ly = hh - th - 4;
+          el.style.left = Math.max(4, lx) + 'px'; el.style.top = Math.max(4, ly) + 'px';
+          return;
+        }
+      }
+    }
+    el.style.display = 'none';
+  }
+
   function drawTrades(ctx, rightX) {
+    tradeBoxes = [];
     if (!TRADES.on || S.tf !== '1m' || !candle || (!tradesData.length && !liveTrade)) return;
     var win = TRADES.winOp / 100, loss = TRADES.lossOp / 100;
     for (var i = 0; i < tradesData.length; i++) {
@@ -712,6 +776,7 @@
       ctx.beginPath(); ctx.moveTo(x1, ye); ctx.lineTo(x2, ye); ctx.stroke();
       ctx.strokeStyle = hexToRgba('#8892a4', 0.35);
       ctx.strokeRect(x1, Math.min(yt, ys), w, Math.abs(ys - yt));
+      tradeBoxes.push({ x1: x1, x2: x1 + w, y1: Math.min(yt, ys), y2: Math.max(yt, ys), t: t });
     }
     if (liveTrade) {                            // the open trade — box extends to the latest bar
       var lt = liveTrade, lx1 = timeToX(lt.entry_ts);
@@ -723,6 +788,7 @@
         ctx.fillStyle = hexToRgba(S.down, loss); ctx.fillRect(lx1, Math.min(le, lsl), lw, Math.abs(lsl - le));
         ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.strokeStyle = hexToRgba('#00d2ff', 0.95);
         ctx.strokeRect(lx1, Math.min(ltp, lsl), lw, Math.abs(lsl - ltp)); ctx.setLineDash([]);
+        tradeBoxes.push({ x1: lx1, x2: lx1 + lw, y1: Math.min(ltp, lsl), y2: Math.max(ltp, lsl), t: lt });
       }
     }
   }
@@ -738,10 +804,12 @@
       // trades drawn) — it never switches the live model (that is the Models page "Set live").
       fetch('/api/models').then(function (r) { return r.json(); }).then(function (d) {
         var ms = (d && d.models) || [], live = (d && d.active) || 'production';
+        // 'Live model' = whatever is switched on; list every other model (incl. production)
+        // so you can switch the VIEW to compare trades. Selecting NEVER changes the live model.
         var opts = '<option value="">Live model (' + live + ')</option>';
         ms.forEach(function (m) {
-          if (m.name === 'production' || m.live) return;          // 'Live model' already covers the active one
-          var tag = m.status ? ' [' + m.status + ']' : '';
+          if (m.live) return;                                    // 'Live model' already covers the active one
+          var tag = m.name === 'production' ? ' (baseline)' : (m.status ? ' [' + m.status + ']' : '');
           opts += '<option value="' + m.name + '">' + m.name + tag + '</option>';
         });
         sel.innerHTML = opts;
@@ -749,7 +817,10 @@
       }).catch(function () {});
       sel.onchange = function () {
         TRADES.model = this.value; saveTrades();
-        tradesCache = { key: null, from: 0, to: 0 }; scheduleTradesFetch(); loadEquity();
+        // switch EVERYTHING per model: trade boxes + equity + the signal band/dots + fire arrows
+        tradesCache = { key: null, from: 0, to: 0 };
+        scoreCache = { key: null, from: 0, to: 0 };
+        scheduleTradesFetch(); loadEquity(); scheduleScoreFetch(); loadFired(S.sym);
       };
     }
     var vsel = $('cx-trade-variant');           // exit style (lq/atr) — restored as its own control
@@ -853,16 +924,22 @@
         + ' · maxDD ' + p + (usd ? dd.toFixed(0) : dd.toFixed(1))
       : 'no trades';
   }
+  // Candle arrows mark ACTUAL TRADE ENTRIES (1:1 with the PnL boxes) — NOT every raw fire.
+  // Most fires never trade (one-position-at-a-time: a fire while already in a trade, or in
+  // the 16:10-18:00 window, is skipped — same as live). The raw fire signal still shows as
+  // columns in the score band below; the arrows + boxes are the trades actually taken.
   function updateScoreMarkers() {
     if (!candle) return;
-    if (!SCORE.on || S.tf !== '1m' || !bars.length) { candle.setMarkers([]); return; }
+    if (!TRADES.on || S.tf !== '1m' || !bars.length) { candle.setMarkers([]); return; }
     var lo = bars[0].time, hi = bars[bars.length - 1].time, mk = [];
-    for (var i = 0; i < scoreData.length; i++) {
-      var s = scoreData[i];
-      if (!s.fire || s.time < lo || s.time > hi) continue;
-      mk.push({ time: s.time, position: s.side === 1 ? 'belowBar' : 'aboveBar',
-                color: s.side === 1 ? S.up : S.down, shape: s.side === 1 ? 'arrowUp' : 'arrowDown' });
+    function add(side, t) {
+      if (t == null || t < lo || t > hi) return;
+      mk.push({ time: t, position: side === 1 ? 'belowBar' : 'aboveBar',
+                color: side === 1 ? S.up : S.down, shape: side === 1 ? 'arrowUp' : 'arrowDown' });
     }
+    for (var i = 0; i < tradesData.length; i++) add(tradesData[i].side, tradesData[i].entry_ts);
+    if (liveTrade) add(liveTrade.side, liveTrade.entry_ts != null ? liveTrade.entry_ts : liveTrade.time);
+    mk.sort(function (a, b) { return a.time - b.time; });   // markers must be time-sorted
     candle.setMarkers(mk);
   }
   function applyScore(ev) {
@@ -873,7 +950,7 @@
     var i = scoreData.length - 1;
     for (; i >= 0; i--) if (scoreData[i].time === ev.time) break;
     if (i >= 0) scoreData[i] = row; else scoreData.push(row);
-    updateScoreMarkers(); redrawLevels();
+    redrawLevels();                     // live score updates the band; arrows come from trades
   }
   function lineDash(style) { return style === 'dotted' ? [2, 3] : style === 'dashed' ? [6, 4] : []; }
   function niceTicks(lo, hi) {
@@ -959,7 +1036,7 @@
         b.classList.toggle('active', SCORE.on);
         applyScoreLayout();
         if (SCORE.on) maybeFetchScores();
-        else { if (candle) candle.setMarkers([]); scoreData = []; scoreCache = { key: null, from: 0, to: 0 }; positionScoreAxis(); redrawLevels(); }
+        else { scoreData = []; scoreCache = { key: null, from: 0, to: 0 }; updateScoreMarkers(); positionScoreAxis(); redrawLevels(); }   // keep trade arrows when Sig is off
       };
     }
     applyLegendOpacity(); wireScoreAxis(); wireScoreNav(); wireScoreSettings();
@@ -1001,6 +1078,7 @@
   // prev/next: scroll to the nearest fired signal within the loaded bars
   function loadFired(sym) {
     var u = new URL('/api/scores/' + sym, location.origin); u.searchParams.set('fired', '1');
+    if (TRADES.model) u.searchParams.set('model', TRADES.model);   // arrows follow the model dropdown
     fetch(u).then(function (r) { return r.json(); }).then(function (d) {
       firedTimes[sym] = (d.scores || []).map(function (s) { return s.time; });
     }).catch(function () {});

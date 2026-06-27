@@ -67,9 +67,18 @@ def bars_hash() -> str:
     return h.hexdigest()[:16]
 
 
-def _default_train(out_dir: Path) -> dict:
+def _live_features():
+    """The live model's feature set (so a retrain forks its FEATURES, not just lineage)."""
+    try:
+        cfg = json.loads((registry.model_dir(registry.live_name()) / "config.json").read_text(encoding="utf-8"))
+        return cfg.get("features")
+    except Exception:
+        return None
+
+
+def _default_train(out_dir: Path, features=None) -> dict:
     from src import train_production
-    return train_production.run(out_dir=out_dir)
+    return train_production.run(out_dir=out_dir, features=features)
 
 
 def retrain_from_live(*, name: str | None = None, now_ts: float | None = None,
@@ -79,7 +88,8 @@ def retrain_from_live(*, name: str | None = None, now_ts: float | None = None,
     live = registry.live_name()
     n = registry.bump_trial()                          # this retrain is a trial (DSR N)
     name = name or week_name(now_ts)
-    train_fn = train_fn or _default_train
+    feats = _live_features()                            # fork the live model's FEATURE set too
+    train_fn = train_fn or (lambda out: _default_train(out, features=feats))
     tmp = Path(tempfile.mkdtemp(prefix="retrain_"))
     try:
         cfg = train_fn(tmp) or {}

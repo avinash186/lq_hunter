@@ -63,9 +63,14 @@ def update_challenger(name: str, symbols, assembled=None, variant: str = "lq") -
     return appended
 
 
+def is_trades_path(name, symbol):           # per-model full-history IS backtest trades
+    return registry.model_dir(name) / f"trades_{symbol.lower()}.parquet"
+
+
 def score_fires(d: pd.DataFrame, model_dir: str):
-    from src import score
-    return score.score(d, d["dir_risk"].to_numpy(), d["symbol_id"].to_numpy(), model_dir=model_dir)
+    from src import score, signals
+    return score.score(d, d["dir_risk"].to_numpy(), d["symbol_id"].to_numpy(),
+                       model_dir=model_dir, levels=signals._levels(d))   # honor cost_mode (lq) gate
 
 
 def metrics_block(trades_df, n_trials: int = 1) -> dict:
@@ -95,6 +100,16 @@ def backtest_metrics(name: str, symbols=None, assembled=None, variant: str = "lq
     d = d[d["pos_in_bracket"].notna()].reset_index(drop=True)
     sc = score_fires(d, str(registry.model_dir(name)))
     ets = signals._to_etnaive(d["ts"])
+    # save this model's per-bar signals snapshot (ALL symbols) for the chart dots/arrows/band
+    for s in dataset._SYMBOL_ID:
+        m = (d["symbol"] == s).to_numpy()
+        if not m.any():
+            continue
+        sig = pd.DataFrame({"ts": ets[m], "p_up": sc["p_up"].to_numpy()[m],
+                            "p_conf": sc["p_conf"].to_numpy()[m], "side": sc["side"].to_numpy()[m],
+                            "fire": sc["fire"].to_numpy()[m]}).astype(signals._COLS)
+        registry.model_dir(name).mkdir(parents=True, exist_ok=True)
+        sig.sort_values("ts").to_parquet(signals.model_signal_path(name, s), index=False)
     frames = []
     for s in symbols:
         mask = (d["symbol"] == s).to_numpy()
@@ -102,7 +117,9 @@ def backtest_metrics(name: str, symbols=None, assembled=None, variant: str = "lq
                               "fire": sc["fire"].to_numpy()[mask]})
         fires = fires[fires["fire"]][["ts", "side"]].sort_values("ts")
         if not fires.empty:
-            frames.append(trades.build(s, variant, fires=fires))
+            tl_s = trades.build(s, variant, fires=fires)
+            tl_s.to_parquet(is_trades_path(name, s), index=False)   # save for the UI dropdown
+            frames.append(tl_s)
     if not frames:
         return {"is": {"trades": 0}}
     tl = pd.concat(frames, ignore_index=True)

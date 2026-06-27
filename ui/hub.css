@@ -492,6 +492,11 @@ td.c-green,.c-green{color:var(--green)}
 #cx-equity-chart{flex:1;min-height:0}
 #cx-chart{position:absolute;inset:0}
 #cx-overlay{position:absolute;inset:0;z-index:3;pointer-events:none}
+.cx-trade-tip{position:absolute;z-index:7;pointer-events:none;min-width:158px;background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:7px 9px;font-size:11px;font-variant-numeric:tabular-nums;color:var(--t2);box-shadow:0 6px 20px rgba(0,0,0,.45)}
+.cx-trade-tip .cx-tt-head{font-weight:800;font-size:11px;letter-spacing:.02em;margin-bottom:5px;padding-bottom:4px;border-bottom:1px solid var(--b1)}
+.cx-trade-tip .cx-tt-row{display:flex;justify-content:space-between;gap:16px;line-height:1.55}
+.cx-trade-tip .cx-tt-row span{color:var(--t3)}
+.cx-trade-tip .cx-tt-row b{color:var(--t1);font-weight:600}
 .cx-legend{position:absolute;top:10px;left:12px;z-index:5;font-size:12px;font-variant-numeric:tabular-nums;color:var(--t2);pointer-events:none;display:flex;gap:10px;align-items:center;flex-wrap:wrap;text-shadow:0 1px 3px rgba(0,0,0,.6)}
 .cx-legend .cx-leg-sym{font-weight:800;color:var(--t1);font-size:13px}
 .cx-legend .cx-leg-tf{color:var(--t3)}
