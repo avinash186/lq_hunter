@@ -34,6 +34,14 @@ def _to_etnaive(ts_utc: pd.Series) -> np.ndarray:
     return ((et - _EPOCH) // pd.Timedelta(seconds=1)).to_numpy().astype("int64")
 
 
+def _levels(d):
+    """(above, below, entry, atr) per row for score()'s LQ-stop cost gate (cost_mode='lq').
+    Built from the assembled meta columns a/b/close + dir_risk (= DIR_K*atr_fast)."""
+    a = d["a"].to_numpy(); b = d["b"].to_numpy()
+    return (np.fmax(a, b), np.fmin(a, b), d["close"].to_numpy(),
+            d["dir_risk"].to_numpy() / dataset.DIR_K)
+
+
 def path(symbol: str):           # static, precomputed historical signals
     return SIG_DIR / f"signals_{symbol.lower()}.parquet"
 
@@ -50,7 +58,7 @@ def precompute(symbols=("NQ", "ES")):
     d = dataset.assemble(symbols)
     d = d[d["pos_in_bracket"].notna()].reset_index(drop=True)
     d["ts"] = _to_etnaive(d["ts"])               # store ET-naive (match chart + live)
-    sc = score.score(d, d["dir_risk"].to_numpy(), d["symbol_id"].to_numpy())
+    sc = score.score(d, d["dir_risk"].to_numpy(), d["symbol_id"].to_numpy(), levels=_levels(d))
     d = d.assign(p_up=sc["p_up"].to_numpy(), p_conf=sc["p_conf"].to_numpy(),
                  side=sc["side"].to_numpy(), fire=sc["fire"].to_numpy())
     for s in symbols:
@@ -109,7 +117,7 @@ def backfill(symbols=("NQ", "ES")) -> dict:
         if sub.empty:
             added[s] = 0
             continue
-        sc = score.score(sub, sub["dir_risk"].to_numpy(), sub["symbol_id"].to_numpy())
+        sc = score.score(sub, sub["dir_risk"].to_numpy(), sub["symbol_id"].to_numpy(), levels=_levels(sub))
         gap = pd.DataFrame({"ts": sub["ts"].to_numpy(),
                             "p_up": sc["p_up"].to_numpy(), "p_conf": sc["p_conf"].to_numpy(),
                             "side": sc["side"].to_numpy(), "fire": sc["fire"].to_numpy()})

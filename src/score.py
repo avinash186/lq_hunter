@@ -58,12 +58,33 @@ def _prep(df: pd.DataFrame, cols) -> pd.DataFrame:
     return X
 
 
+ATR_FLOOR, TP_CAP = 1.0, 4.0      # matches src/trades.bracket_and_size LQ clip
+
+
+def lq_stop_pts(side, entry, atr, above, below, symbol_id, cfg):
+    """LQ stop distance (points) per row for the PREDICTED side, matching
+    trades.bracket_and_size: clip(|against-level - entry|, 1*ATR, min(4*ATR, MAX_RISK/pv))."""
+    side = np.asarray(side); entry = np.asarray(entry, float); atr = np.asarray(atr, float)
+    above = np.asarray(above, float); below = np.asarray(below, float)
+    id2sym = {int(v): k for k, v in cfg["symbol_id"].items()}
+    pv = np.array([config.EXEC_POINT_VALUE.get(id2sym.get(int(s), "NQ"), 2.0) for s in symbol_id])
+    max_sl = config.MAX_RISK_PER_TRADE / pv
+    floor = ATR_FLOOR * atr
+    cap = np.minimum(TP_CAP * atr, max_sl)
+    against = np.where(side == 1, below, above)              # long stops below, short above
+    dist = np.abs(against - entry)
+    fallback = np.minimum(1.5 * atr, max_sl)
+    sl = np.where(np.isfinite(against), np.clip(dist, floor, cap), fallback)
+    return np.maximum(sl, 1e-9)
+
+
 def score(feat: pd.DataFrame, risk: np.ndarray, symbol_id: np.ndarray,
-          model_dir=None) -> pd.DataFrame:
-    """Score a feature frame. ``risk`` = k*atr_fast per row (= dir_risk, the stop
-    distance, for the cost filter); ``symbol_id`` per row. ``model_dir`` overrides the
-    active model (used to SHADOW-score a challenger); default = the live model. Returns a
-    frame with p_up, p_conf, side, fire, size."""
+          model_dir=None, levels=None) -> pd.DataFrame:
+    """Score a feature frame. ``risk`` = k*atr_fast per row (= dir_risk, the legacy cost-
+    filter stop); ``symbol_id`` per row. ``model_dir`` overrides the active model (shadow
+    scoring). ``levels`` = (above, below, entry, atr) per row enables the LQ-stop cost gate
+    when cost_mode='lq' (cost measured against the real liquidity stop). Returns a frame
+    with p_up, p_conf, side, fire, size."""
     cfg, primary, meta, iso = _load_dir(str(model_dir)) if model_dir is not None else _load()
     cols = cfg["features"]
     X = _prep(feat, cols)
@@ -72,7 +93,14 @@ def score(feat: pd.DataFrame, risk: np.ndarray, symbol_id: np.ndarray,
     p_conf = iso.predict(meta.predict(Xm))
     side = (p_up >= 0.5).astype(int)
     tick = {int(k): config.TICK_SIZE.get(n, 0.25) for n, k in cfg["symbol_id"].items()}
-    cost = cfg["cost_ticks"] * np.array([tick.get(int(s), 0.25) for s in symbol_id]) / np.maximum(risk, 1e-9)
+    tick_arr = np.array([tick.get(int(s), 0.25) for s in symbol_id])
+    cost_mode = cfg.get("cost_mode", config.COST_MODE)
+    if cost_mode == "lq" and levels is not None:
+        above, below, entry, atr = levels
+        cost_risk = lq_stop_pts(side, entry, atr, above, below, symbol_id, cfg)
+    else:
+        cost_risk = np.asarray(risk, float)
+    cost = cfg["cost_ticks"] * tick_arr / np.maximum(cost_risk, 1e-9)
     cok = cost < cfg["cost_max_r"]
     fire = (p_conf >= cfg["best_q"]) & cok
     out = pd.DataFrame(index=feat.index)
@@ -98,11 +126,15 @@ def live_score(symbol: str, df: pd.DataFrame, partner_pos: float = 0.0) -> dict:
     feat["partner_pos_in_bracket"] = float(partner_pos)
     sid = dataset._SYMBOL_ID.get(symbol.upper(), 0)
     feat["symbol_id"] = sid
-    risk = np.array([float(dataset.DIR_K * tech["atr_fast"].iloc[-1])])
-    sc = score(feat, risk, np.array([sid]))
-    pos = geo["pos_in_bracket"].iloc[-1]
+    atr_f = float(tech["atr_fast"].iloc[-1])
+    risk = np.array([float(dataset.DIR_K * atr_f)])
     a, b = bk["a"].iloc[-1], bk["b"].iloc[-1]              # nearest levels for the exit bracket
     above, below = np.fmax(a, b), np.fmin(a, b)
+    entry = float(df["close"].iloc[-1])
+    # LQ-stop cost gate (cost_mode='lq') uses the real liquidity stop, not 1.5*ATR
+    levels = (np.array([above]), np.array([below]), np.array([entry]), np.array([atr_f]))
+    sc = score(feat, risk, np.array([sid]), levels=levels)
+    pos = geo["pos_in_bracket"].iloc[-1]
     return {"p_up": float(sc["p_up"].iloc[0]), "p_conf": float(sc["p_conf"].iloc[0]),
             "side": int(sc["side"].iloc[0]), "fire": bool(sc["fire"].iloc[0]),
             "pos_in_bracket": float(pos) if pos == pos else 0.0,
