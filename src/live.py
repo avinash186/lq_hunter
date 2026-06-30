@@ -24,7 +24,7 @@ import time
 import pandas as pd
 
 import config
-from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify, execution, settings, tgcontrol
+from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify, execution, settings, tgcontrol, tradovate_exec
 
 log = logging.getLogger("live")
 NY = "America/New_York"
@@ -155,6 +155,7 @@ class LiveEngine:
             try:
                 execution.reconcile_startup()
                 execution.start_user_hub()
+                tradovate_exec.reconcile_startup()        # additive: mirror for Tradovate accounts
             except Exception:
                 log.exception("live: broker execution boot failed (continuing)")
         self._mkt_open = _market_open()                   # session-card transition tracker
@@ -162,6 +163,7 @@ class LiveEngine:
             handlers = {"kill": self._cmd_kill, "flat": self._cmd_kill,
                         "resume": self._cmd_resume, "status": tgcontrol.cmd_status,
                         "list": tgcontrol.cmd_list, "opt": tgcontrol.cmd_opt,
+                        "add": tgcontrol.cmd_add,
                         "stop": tgcontrol.cmd_stop, "health": self._cmd_health,
                         "help": tgcontrol.cmd_help}
             try:                                          # /hub /fetch -> the same poller
@@ -398,6 +400,10 @@ class LiveEngine:
         notify.send_and_relay_trade(
             f"📈 {symbol} {d} @ {br['entry']:.2f}\nTP {br['tp']:.2f}   SL {br['sl']:.2f}   "
             f"R:R {br['rr']:.2f}\n{br['contracts']} MNQ   risk ${br['risk_usd']:.0f}")
+        # Fan the SAME order out to every Tradovate account CONCURRENTLY (additive; the Topstep
+        # path below is untouched; a daemon thread => zero added latency to the Topstep order).
+        threading.Thread(target=tradovate_exec.submit_all, args=(symbol, tr),
+                         name="tv-fanout", daemon=True).start()
         # Route to the broker; in LIVE mode only open the local (paper/UI) trade if the broker
         # actually took it — so the sim can never desync into a phantom trade. In DRY mode the
         # paper trade always opens (execution.submit sends the 🧪 alert).
@@ -458,14 +464,20 @@ class LiveEngine:
     # ───────────── Telegram commands (/kill failsafe) ─────────────
     def _cmd_kill(self, chat_id=None):
         s = execution.flatten_all()
+        tv = tradovate_exec.flatten_all_accounts()         # additive: flatten Tradovate too
         for sym in self.symbols:
             self._trade[sym] = None
-        return (f"⛔ KILL — cancelled {s['cancelled']} order(s), closed {s['closed']} position(s)."
-                + (f" errors: {s['errors']}" if s['errors'] else "")
-                + " Entries HALTED — send /resume to re-enable.")
+        msg = (f"⛔ KILL — cancelled {s['cancelled']} order(s), closed {s['closed']} position(s)."
+               + (f" errors: {s['errors']}" if s['errors'] else ""))
+        if tv["cancelled"] or tv["closed"] or tv["errors"]:
+            msg += f"\nTradovate — cancelled {tv['cancelled']}, closed {tv['closed']}."
+            if tv["errors"]:
+                msg += f" errors: {tv['errors']}"
+        return msg + " Entries HALTED — send /resume to re-enable."
 
     def _cmd_resume(self, chat_id=None):
         execution.resume()
+        tradovate_exec.resume()                            # additive
         return "✅ Entries resumed."
 
     def _feed_watchdog(self):
@@ -508,6 +520,9 @@ class LiveEngine:
                 lines.append(f"Broker: ⚠️ {e}")
         else:
             lines.append("Mode: 🧪 DRY")
+        tv = tgcontrol.tradovate_status_lines()                # additive: Tradovate accounts/positions
+        if tv:
+            lines.append(tv)
         return "\n".join(lines)
 
     def _session_card(self):
@@ -550,6 +565,8 @@ class LiveEngine:
                 log.exception("live: reconcile failed")
             try:
                 execution.reconcile()                 # broker-truth state sync (self-heal)
+                tradovate_exec.reconcile_all()         # additive: same self-heal for Tradovate
+                tradovate_exec.warm_tokens()           # keep Tradovate tokens warm (low latency)
             except Exception:
                 log.exception("live: execution reconcile failed")
             try:
