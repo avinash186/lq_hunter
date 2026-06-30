@@ -52,6 +52,23 @@ def send(text: str, *, parse_mode: str | None = None) -> bool:
     return send_to(config.TELEGRAM_CHAT_ID, text, parse_mode=parse_mode)
 
 
+def relay_trade(text: str) -> None:
+    """Mirror a trade entry/exit alert to the one-way TELEGRAM_TRADE_RECIPIENTS
+    (comma-separated chat IDs). Purely additive: no-op when unset, independent of
+    the owner alert, and never raises."""
+    ids = [c.strip() for c in str(getattr(config, "TELEGRAM_TRADE_RECIPIENTS", "")).split(",") if c.strip()]
+    for cid in ids:
+        send_to(cid, text)
+
+
+def send_and_relay_trade(text: str, *, parse_mode: str | None = None) -> bool:
+    """Send to the owner (unchanged behavior + return value) AND mirror to the
+    trade-relay recipients. Use only for trade entry/exit + broker execution alerts."""
+    ok = send(text, parse_mode=parse_mode)
+    relay_trade(text)
+    return ok
+
+
 # ── Command listener (for /kill etc.) ──────────────────────────────────────
 _UPDATES = "https://api.telegram.org/bot{token}/getUpdates"
 

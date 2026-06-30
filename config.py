@@ -26,6 +26,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # Extra chat IDs (comma-separated, NUMERIC) that receive ONLY the /hub link.
 # Each recipient must have started the bot first; a @handle will not work.
 TELEGRAM_HUB_RECIPIENTS = os.getenv("TELEGRAM_HUB_RECIPIENTS", "")
+# Extra chat IDs (comma-separated, NUMERIC) that receive ONLY trade entry/exit
+# alerts (one-way; no bot control). Each must have started the bot first.
+TELEGRAM_TRADE_RECIPIENTS = os.getenv("TELEGRAM_TRADE_RECIPIENTS", "")
 
 # ── Web UI ──
 UI_HOST = os.getenv("UI_HOST", "127.0.0.1")

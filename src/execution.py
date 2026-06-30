@@ -127,7 +127,7 @@ def submit(symbol: str, signal: dict) -> dict:
                                                   sl_ticks, tp_ticks, tag)
             _submitted_tags.add(tag)
             log.info("execution[DRY]: would place %s", payload)
-            notify.send(f"🧪 DRY {symbol} {'LONG' if signal['side']==1 else 'SHORT'} "
+            notify.send_and_relay_trade(f"🧪 DRY {symbol} {'LONG' if signal['side']==1 else 'SHORT'} "
                         f"{contracts}x  SL {signal['sl_pts']:.1f} pt / TP {signal['tp_pts']:.1f} pt  tag {tag}")
             return {"action": "dry_run", "payload": payload}
 
@@ -166,12 +166,12 @@ def submit(symbol: str, signal: dict) -> dict:
                 reason = resp.get("errorMessage") or f"errorCode {resp.get('errorCode')}"
                 _st(symbol).update(status=FLAT)
                 log.error("execution: order REJECTED %s: %s", symbol, reason)
-                notify.send(f"⛔ {symbol} order REJECTED: {reason}")
+                notify.send_and_relay_trade(f"⛔ {symbol} order REJECTED: {reason}")
                 return {"action": "rejected", "reason": reason}
             oid = resp.get("orderId") if isinstance(resp, dict) else None
             _st(symbol).update(status=OPEN, order_id=oid, open_ts=time.time())
             log.info("execution: placed %s %sx %s tag=%s orderId=%s", symbol, contracts, cid, tag, oid)
-            notify.send(f"✅ {symbol} {'LONG' if signal['side']==1 else 'SHORT'} {contracts}x "
+            notify.send_and_relay_trade(f"✅ {symbol} {'LONG' if signal['side']==1 else 'SHORT'} {contracts}x "
                         f"placed (SL {signal['sl_pts']:.1f} pt / TP {signal['tp_pts']:.1f} pt) order {oid}")
             return {"action": "placed", "order_id": oid, "tag": tag}
         except Exception as e:                          # noqa: BLE001 — timeout/network
@@ -180,11 +180,11 @@ def submit(symbol: str, signal: dict) -> dict:
             if landed:
                 _submitted_tags.add(tag)
                 _st(symbol).update(status=OPEN, open_ts=time.time())
-                notify.send(f"⚠️ {symbol} submit raised but order is LIVE on broker — adopted.")
+                notify.send_and_relay_trade(f"⚠️ {symbol} submit raised but order is LIVE on broker — adopted.")
                 return {"action": "adopted_after_error", "tag": tag}
             _st(symbol).update(status=FLAT)
             log.exception("execution: submit failed, no order on broker")
-            notify.send(f"⛔ {symbol} order FAILED ({e}) — no order on broker, staying flat.")
+            notify.send_and_relay_trade(f"⛔ {symbol} order FAILED ({e}) — no order on broker, staying flat.")
             return {"action": "error", "reason": "submit_failed_no_order"}
 
 
@@ -201,7 +201,7 @@ def on_position_update(positions: list[dict]) -> None:
                     continue                          # too fresh — ignore a lagging event
                 s["status"] = FLAT
                 log.info("execution: %s position closed (broker) -> flat", sym)
-                notify.send(f"🏁 {sym} position closed on broker.")
+                notify.send_and_relay_trade(f"🏁 {sym} position closed on broker.")
 
 
 def reconcile() -> None:

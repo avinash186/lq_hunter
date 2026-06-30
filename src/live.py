@@ -395,8 +395,9 @@ class LiveEngine:
                                      max_risk=settings.max_risk())
         tr = {"entry_ts": int(bar["start"]), "side": int(res["side"]), **br}
         d = "LONG" if tr["side"] == 1 else "SHORT"
-        notify.send(f"📈 {symbol} {d} @ {br['entry']:.2f}\nTP {br['tp']:.2f}   SL {br['sl']:.2f}   "
-                    f"R:R {br['rr']:.2f}\n{br['contracts']} MNQ   risk ${br['risk_usd']:.0f}")
+        notify.send_and_relay_trade(
+            f"📈 {symbol} {d} @ {br['entry']:.2f}\nTP {br['tp']:.2f}   SL {br['sl']:.2f}   "
+            f"R:R {br['rr']:.2f}\n{br['contracts']} MNQ   risk ${br['risk_usd']:.0f}")
         # Route to the broker; in LIVE mode only open the local (paper/UI) trade if the broker
         # actually took it — so the sim can never desync into a phantom trade. In DRY mode the
         # paper trade always opens (execution.submit sends the 🧪 alert).
@@ -452,7 +453,7 @@ class LiveEngine:
             log.exception("live: trade append failed")
         self.broadcast({"e": "trade_close", "sym": symbol, **rec})
         emo = "✅" if R > 0 else "❌"
-        notify.send(f"{emo} {symbol} {outcome.upper()}   R {R:+.2f}   P&L ${rec['pnl_usd']:+.0f}")
+        notify.send_and_relay_trade(f"{emo} {symbol} {outcome.upper()}   R {R:+.2f}   P&L ${rec['pnl_usd']:+.0f}")
 
     # ───────────── Telegram commands (/kill failsafe) ─────────────
     def _cmd_kill(self, chat_id=None):
