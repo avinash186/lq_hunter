@@ -709,7 +709,7 @@
     }
     return el;
   }
-  function fmtDur(s) {
+  function fmtHold(s) {                  // trade hold duration: "45m" / "1h 30m"
     var m = Math.max(0, Math.round(s / 60));
     return m < 60 ? m + 'm' : Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
   }
@@ -734,7 +734,7 @@
     if (t.contracts != null) h += row('Size', t.contracts + ' ' + (S.sym === 'ES' ? 'MES' : 'MNQ'));
     if (t.risk_usd != null) h += row('Risk', '$' + (+t.risk_usd).toFixed(0));
     if (t.pnl_usd != null) h += row('P&L', (t.pnl_usd >= 0 ? '+$' : '−$') + Math.abs(+t.pnl_usd).toFixed(0), pc(t.pnl_usd));
-    if (t.entry_ts && t.exit_ts) h += row('Held', fmtDur(t.exit_ts - t.entry_ts));
+    if (t.entry_ts && t.exit_ts) h += row('Held', fmtHold(t.exit_ts - t.entry_ts));
     return h;
   }
   function updateTradeTip(px, py) {
