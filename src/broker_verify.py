@@ -23,8 +23,13 @@ from src import topstep, tradovate, tradovate_exec, broker_accounts, notify, set
 
 log = logging.getLogger(__name__)
 
-ENTRY_GRACE = 5.0        # sec to allow (possibly late) fills to settle before confirming
-EXIT_GRACE = 6.0         # sec after the algo exit before requiring all brokers flat
+# Timing model: anchor the clock to the FIRST broker that confirms (filled / flat), then
+# give the OTHERS this leeway to catch up before we call it a mismatch. This isolates the
+# inter-broker SPREAD (sub-second to ~2s normally) rather than the absolute fill time, so a
+# uniformly-slow fill never false-alarms. Tune here.
+LEEWAY = 5.0             # sec the other brokers get, measured from the FIRST confirmation
+POLL_EVERY = 1.0         # re-check cadence within the leeway window
+ANCHOR_CAP = 20.0        # give up waiting for a FIRST confirmation after this
 
 
 # ── per-broker position truth ──
@@ -80,53 +85,89 @@ def _all_targets(symbol):
     return out
 
 
+def _wait_for_anchor(targets, ready, cap):
+    """Poll until at least one target is `ready` (a callable label-filter over current sizes),
+    or the anchor cap elapses. Returns the anchor time, or None if none confirmed in time."""
+    t0 = time.time()
+    while True:
+        sizes = [(l, fn()) for l, fn in targets]
+        if ready(sizes):
+            return time.time()
+        if time.time() - t0 >= cap:
+            return None
+        time.sleep(POLL_EVERY)
+
+
+def _sizes(targets):
+    return [(l, fn()) for l, fn in targets]
+
+
 # ── entry: confirm consistent fills ──
-def verify_entry(symbol: str, signal: dict, delay: float = ENTRY_GRACE) -> None:
+def verify_entry(symbol: str, signal: dict) -> None:
     if not settings.execute_broker():
         return
-    threading.Thread(target=_verify_entry, args=(symbol, signal, delay),
+    threading.Thread(target=_verify_entry, args=(symbol, signal),
                      name="verify-entry", daemon=True).start()
 
 
-def _verify_entry(symbol, signal, delay):
-    time.sleep(delay)
+def _verify_entry(symbol, signal, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP):
+    targets = _all_targets(symbol)
+    if not targets:
+        return
     want = int(signal.get("contracts") or 0)
-    filled, missing = [], []
-    for label, size_fn in _all_targets(symbol):
-        sz = size_fn()
-        (filled if sz else missing).append((label, sz))
-    if not filled and not missing:
-        return                                         # nothing active
-    lines = [f"✅ {name} filled {sz}x" for name, sz in filled]
-    lines += [f"⚠️ {name} NOT filled" for name, _ in missing]
-    if missing and filled:                             # the dangerous case: partial fan-out
-        notify.send("🚨 ENTRY FILL MISMATCH — some brokers filled, some did NOT:\n"
+    # phase 1: wait for the FIRST broker to fill -> anchor the clock
+    anchor = _wait_for_anchor(targets, lambda sz: any(s for _, s in sz), cap)
+    if anchor is None:
+        return                                         # nobody filled at all (rejects alerted separately)
+    # phase 2: give the OTHERS `leeway` (from the anchor) to catch up; stop early if all filled
+    while True:
+        sizes = _sizes(targets)
+        if all(s for _, s in sizes) or time.time() - anchor >= leeway:
+            break
+        time.sleep(poll)
+    filled = [(l, s) for l, s in sizes if s]
+    missing = [(l, s) for l, s in sizes if not s]
+    lines = [f"✅ {l} filled {s}x" for l, s in filled] + [f"⚠️ {l} NOT filled" for l, _ in missing]
+    if missing:                                        # still inconsistent AFTER the leeway
+        notify.send("🚨 ENTRY FILL MISMATCH — some brokers filled, some did NOT (after leeway):\n"
                     + "\n".join(lines) + "\nReview positions; consider /kill.")
         log.warning("broker_verify: entry mismatch %s filled=%s missing=%s", symbol, filled, missing)
-    elif filled:                                       # all good — per-account confirmation
-        odd = [n for n, sz in filled if want and sz != want]
+    else:                                              # all filled — per-account confirmation
+        odd = [l for l, s in filled if want and s != want]
         note = ("\n⚠️ size mismatch on: " + ", ".join(odd)) if odd else ""
         notify.send(f"📥 {symbol} entry fills confirmed:\n" + "\n".join(lines) + note)
 
 
 # ── exit: confirm every broker is flat ──
-def verify_exit(symbol: str, delay: float = EXIT_GRACE) -> None:
+def verify_exit(symbol: str) -> None:
     if not settings.execute_broker():
         return
-    threading.Thread(target=_verify_exit, args=(symbol, delay),
-                     name="verify-exit", daemon=True).start()
+    threading.Thread(target=_verify_exit, args=(symbol,), name="verify-exit", daemon=True).start()
 
 
-def _verify_exit(symbol, delay):
-    time.sleep(delay)
+def _verify_exit(symbol, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP):
     targets = _all_targets(symbol)
     if not targets:
         return
-    still_open = [name for name, size_fn in targets if size_fn()]
-    if still_open:
-        notify.send("🚨 EXIT DESYNC — the algo exited but these broker(s) STILL HOLD a position:\n"
-                    + "\n".join(f"• {n}" for n in still_open)
+    n = len(targets)
+    # phase 1: wait for the FIRST broker to go flat -> anchor the clock
+    anchor = _wait_for_anchor(targets, lambda sz: sum(1 for _, s in sz if s) < n, cap)
+    if anchor is None:                                 # none flattened -> all still holding = CONSISTENT
+        still = [l for l, s in _sizes(targets) if s]
+        if still:
+            notify.send(f"⚠️ {symbol} — algo exited but no broker has closed yet (all still holding; "
+                        f"their OCO hasn't triggered). Consistent across brokers — monitoring, not a desync.")
+        return
+    # phase 2: give the OTHERS `leeway` to flatten too; stop early once all flat
+    while True:
+        still = [l for l, s in _sizes(targets) if s]
+        if not still or time.time() - anchor >= leeway:
+            break
+        time.sleep(poll)
+    if still:                                          # inconsistent AFTER the leeway -> the dangerous case
+        notify.send("🚨 EXIT DESYNC — the algo exited and some brokers closed, but these STILL HOLD a "
+                    "position (after leeway):\n" + "\n".join(f"• {l}" for l in still)
                     + "\nThe others are flat. Decide whether to /kill.")
-        log.warning("broker_verify: exit desync on %s — still open: %s", symbol, still_open)
+        log.warning("broker_verify: exit desync on %s — still open: %s", symbol, still)
     else:
         notify.send(f"🏁 {symbol} — all brokers confirmed flat.")
