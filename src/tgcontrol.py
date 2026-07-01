@@ -19,6 +19,7 @@ RISK_PRESETS = (100, 130, 150, 200)
 # by bot.py's tunnel handlers, the rest by tgcontrol / the live engine.
 COMMAND_MENU = [
     ("opt", "View & edit settings"),
+    ("acc", "Accounts — tap to switch/enable/disable"),
     ("add", "Add a broker account (Tradovate)"),
     ("status", "Live status + hub link"),
     ("health", "Feed / position / broker health"),
@@ -256,6 +257,42 @@ def cmd_opt(chat_id) -> None:
     return None                          # already sent
 
 
+# ── /acc: unified account board — Topstep (switch, 1 active) + Tradovate (toggle) ──
+def _acc_menu(note: str = ""):
+    head = (note + "\n\n" if note else "")
+    head += ("🔀 Accounts — Topstep: tap to switch (1 active). "
+             "Tradovate: tap to enable/disable (any number).")
+    rows = []
+    try:
+        accts = topstep.search_accounts()
+    except Exception:                    # noqa: BLE001
+        accts = []
+    cur = str(settings.account_id())
+    if accts:
+        rows.append([{"text": "— Topstep (1 active) —", "callback_data": "acc:noop"}])
+        for a in accts:
+            aid = str(a.get("id"))
+            mark = "🟢" if aid == cur else "⚪"
+            rows.append([{"text": f"{mark} {aid} {a.get('name', '')}"[:40], "callback_data": f"acc:ts:{aid}"}])
+    tv = broker_accounts.accounts()
+    if tv:
+        rows.append([{"text": "— Tradovate (toggle) —", "callback_data": "acc:noop"}])
+        for lg, ac in tv:
+            mark = "🟢" if ac.get("enabled", True) else "⚪"
+            rows.append([{"text": f"{mark} {ac.get('name')}"[:40],
+                          "callback_data": f"acc:tv:{lg['id']}:{ac['id']}"}])
+    if not accts and not tv:
+        rows.append([{"text": "No accounts — use /add", "callback_data": "acc:noop"}])
+    rows.append([{"text": "🔄 Refresh", "callback_data": "acc:refresh"}, _CANCEL])
+    return head, rows
+
+
+def cmd_acc(chat_id) -> None:
+    text, rows = _acc_menu()
+    notify.send_keyboard(chat_id, text, rows)
+    return None
+
+
 # ── /add: register a broker account (Tradovate only for now) ──
 def cmd_add(chat_id) -> None:
     """Step 1: pick a broker. Only Tradovate is offered (Topstep is native)."""
@@ -331,6 +368,20 @@ def _route(data: str, chat):
         aid = data.split(":", 2)[2]
         settings.set("account_id", aid)
         return _opt_menu(f"✅ Account {aid}")
+    # ── /acc routing ──
+    if data in ("acc:refresh", "acc:noop"):
+        return _acc_menu()
+    if data.startswith("acc:ts:"):
+        if _position_open():
+            return _acc_menu("⚠️ Can't switch Topstep account while in a position.")
+        aid = data.split(":", 2)[2]
+        settings.set("account_id", aid)
+        return _acc_menu(f"✅ Topstep active account → {aid}")
+    if data.startswith("acc:tv:"):
+        _, _, login_id, acct_id = data.split(":", 3)
+        new = broker_accounts.toggle_account(login_id, acct_id)
+        state = "enabled 🟢" if new else ("disabled ⚪" if new is not None else "not found")
+        return _acc_menu(f"✅ Tradovate account {state}")
     # ── /add routing ──
     if data == "add:broker:tradovate":
         return _add_broker_menu(chat)

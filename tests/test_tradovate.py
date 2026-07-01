@@ -279,6 +279,45 @@ def test_add_flow_existing_login_reuses_creds():
     assert len(broker_accounts.logins()) == 1                 # reused, no new login
 
 
+def test_acc_toggles_tradovate_account():
+    _reset_accounts(); _silence(); _settings()
+    topstep.search_accounts = lambda *a, **k: [{"id": "12345", "name": "Combine"}]
+    lid = broker_accounts.add_login("tradovate", "TV", {})
+    broker_accounts.add_account(lid, "99", "Micro-A", enabled=True)
+    # tapping an enabled Tradovate account disables it; tapping again re-enables
+    tgcontrol._route(f"acc:tv:{lid}:99", chat=55)
+    assert broker_accounts.find_account_by_name("Micro-A")[1]["enabled"] is False
+    tgcontrol._route(f"acc:tv:{lid}:99", chat=55)
+    assert broker_accounts.find_account_by_name("Micro-A")[1]["enabled"] is True
+
+
+def test_acc_topstep_is_radio_switch():
+    _reset_accounts(); _silence(); _settings()
+    tgcontrol._position_open = lambda: False           # not in a position
+    topstep.search_accounts = lambda *a, **k: [{"id": "111", "name": "A"}, {"id": "222", "name": "B"}]
+    tgcontrol._route("acc:ts:222", chat=55)
+    assert str(settings.account_id()) == "222"          # switched the single active Topstep account
+
+
+def test_acc_topstep_switch_blocked_in_position():
+    _reset_accounts(); _silence(); _settings()
+    tgcontrol._position_open = lambda: True             # holding a position
+    topstep.search_accounts = lambda *a, **k: [{"id": "111", "name": "A"}, {"id": "222", "name": "B"}]
+    before = str(settings.account_id())
+    text, rows = tgcontrol._route("acc:ts:222", chat=55)
+    assert str(settings.account_id()) == before and "position" in text.lower()
+
+
+def test_acc_menu_lists_both_brokers():
+    _reset_accounts(); _silence(); _settings()
+    topstep.search_accounts = lambda *a, **k: [{"id": "12345", "name": "Combine"}]
+    lid = broker_accounts.add_login("tradovate", "TV", {})
+    broker_accounts.add_account(lid, "99", "Micro-A")
+    text, rows = tgcontrol._acc_menu()
+    flat = str(rows)
+    assert "acc:ts:12345" in flat and "acc:tv:" in flat and "Micro-A" in flat
+
+
 def test_status_lines_show_tradovate():
     _reset_accounts(); _silence(); _settings(execute=False)
     lid = broker_accounts.add_login("tradovate", "TV", {})

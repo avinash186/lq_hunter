@@ -134,7 +134,7 @@ def test_every_menu_command_is_wired():
     from src import live
     menu = {c[0] for c in tgcontrol.COMMAND_MENU}
     handlers = {}
-    handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help", "stop", "add")})
+    handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help", "stop", "add", "acc")})
     handlers.update({c: getattr(bot, "cmd_" + c) for c in ("hub", "fetch")})
     handlers.update({"kill": live.LiveEngine._cmd_kill, "flat": live.LiveEngine._cmd_kill,
                      "resume": live.LiveEngine._cmd_resume, "health": live.LiveEngine._cmd_health})

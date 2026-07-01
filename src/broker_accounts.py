@@ -161,6 +161,24 @@ def set_enabled(name: str, enabled: bool) -> bool:
     return False
 
 
+def toggle_account(login_id: str, acct_id: str):
+    """Flip an account's enabled flag by (login, id). Returns the NEW state, or None if
+    not found. Tradovate can have any number enabled at once."""
+    with _lock:
+        d = _load()
+        for lg in d["logins"]:
+            if lg.get("id") != login_id:
+                continue
+            for ac in lg.get("accounts", []):
+                if str(ac.get("id")) == str(acct_id):
+                    ac["enabled"] = not ac.get("enabled", True)
+                    _persist(d)
+                    log.info("broker_accounts: %s (%s) -> %s", ac.get("name"), acct_id,
+                             "enabled" if ac["enabled"] else "disabled")
+                    return ac["enabled"]
+    return None
+
+
 def remove_login(login_id: str) -> bool:
     with _lock:
         d = _load(); before = len(d["logins"])
