@@ -32,7 +32,7 @@ LIVE_BASE = "https://live.tradovateapi.com/v1"
 _REQUIRED = ("name", "password", "appId", "cid", "sec")   # min fields to attempt auth
 
 _session = requests.Session()
-_tokens: dict[str, tuple[str, float]] = {}        # login_id -> (accessToken, expiry_epoch)
+_tokens: dict[str, tuple[str, float, int]] = {}   # login_id -> (accessToken, expiry_epoch, userId)
 
 
 class TradovateError(RuntimeError):
@@ -65,6 +65,7 @@ def _login(login: dict) -> str | None:
     tok = _tokens.get(lid)
     if tok and tok[1] - 60 > time.time():
         return tok[0]
+    _userid = None
     body = {"name": creds["name"], "password": creds["password"],
             "appId": creds["appId"], "appVersion": creds.get("appVersion", "1.0"),
             "cid": creds["cid"], "sec": creds["sec"], "deviceId": creds.get("deviceId", "lgbm-trader")}
@@ -83,8 +84,16 @@ def _login(login: dict) -> str | None:
         except Exception:                              # noqa: BLE001
             pass
     log.info("tradovate: login %s authenticated", lid)
-    _tokens[lid] = (token, exp)
+    _tokens[lid] = (token, exp, j.get("userId"))
     return token
+
+
+def user_id(login: dict):
+    """The Tradovate userId for a login (needed for the user WebSocket subscribe). None if
+    unconfigured."""
+    if _login(login) is None:
+        return None
+    return (_tokens.get(login.get("id", "")) or (None, None, None))[2]
 
 
 def _post(login: dict, path: str, body: dict | None = None) -> dict | None:

@@ -236,3 +236,59 @@ def warm_tokens() -> None:
     """Keep every configured login's token warm (called periodically for low latency)."""
     for lg, _ in broker_accounts.accounts():
         tradovate.validate_token(lg)
+
+
+# ── real-time (WebSocket) event handlers — the safety-net polling reconcile still runs ──
+def _symbol_for_contract(login_id, contract_id):
+    for sym in config.TRADE_SYMBOLS:
+        c = _contracts.get((login_id, sym))
+        if c and contract_id is not None and int(c.get("id", -1)) == int(contract_id):
+            return sym
+    return None
+
+
+def _account_name(login_id, account_id):
+    lg = broker_accounts.get_login(login_id)
+    if lg:
+        for ac in lg.get("accounts", []):
+            if str(ac.get("id")) == str(account_id):
+                return ac.get("name", account_id)
+    return str(account_id)
+
+
+def on_position_event(login_id, account_id, contract_id, net_pos) -> None:
+    """Real-time position update from the WS. netPos==0 => broker closed the position; free
+    the one-at-a-time slot immediately + alert (mirrors execution.on_position_update)."""
+    if contract_id is None or account_id is None:
+        return
+    sym = _symbol_for_contract(login_id, contract_id)
+    if sym is None:
+        return
+    key = (login_id, str(account_id), sym)
+    with _lock:
+        s = _state.setdefault(key, {"status": FLAT})
+        if net_pos == 0:
+            if s.get("status") in (OPEN, CLOSING):
+                s["status"] = FLAT
+                name = _account_name(login_id, account_id)
+                log.info("tradovate_exec: %s %s closed (real-time) -> flat", name, sym)
+                notify.send(f"🏁 Tradovate {name} {sym} position closed on broker (real-time).")
+        elif s.get("status") == FLAT:                  # opened/confirmed
+            s.update(status=OPEN, contract_id=contract_id, open_ts=time.time())
+
+
+def on_fill_event(login_id, account_id, contract_id, qty, price, action) -> None:
+    """Real-time fill (logged only; the per-account fill/consistency ALERTS come from
+    broker_verify, so we don't double-message Telegram)."""
+    sym = _symbol_for_contract(login_id, contract_id) or contract_id
+    log.info("tradovate_exec: fill %s %s %s x%s @ %s",
+             _account_name(login_id, account_id), sym, action, qty, price)
+
+
+def start_user_streams() -> None:
+    """Start the real-time user WebSocket for all configured logins (polling stays as safety net)."""
+    try:
+        from src import tradovate_ws
+        tradovate_ws.start_all(on_position_event, on_fill_event)
+    except Exception:                                  # noqa: BLE001
+        log.exception("tradovate_exec: could not start user streams (polling still active)")

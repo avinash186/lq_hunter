@@ -136,7 +136,7 @@ def test_every_menu_command_is_wired():
     handlers = {}
     handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help", "stop", "add", "acc")})
     handlers.update({c: getattr(bot, "cmd_" + c) for c in ("hub", "fetch")})
-    handlers.update({"kill": live.LiveEngine._cmd_kill, "flat": live.LiveEngine._cmd_kill,
+    handlers.update({"kill": live.LiveEngine._cmd_kill,
                      "resume": live.LiveEngine._cmd_resume, "health": live.LiveEngine._cmd_health})
     missing = menu - set(handlers)
     assert not missing, f"menu commands with NO handler: {missing}"
@@ -179,8 +179,9 @@ def test_command_menu_is_valid():
     for cmd, desc in tgcontrol.COMMAND_MENU:
         assert re.match(r"^[a-z0-9_]{1,32}$", cmd), cmd        # Telegram command rules
         assert 1 <= len(desc) <= 256
-    for need in ("opt", "list", "status", "kill", "flat", "resume", "help", "hub", "fetch", "stop"):
+    for need in ("opt", "acc", "add", "list", "status", "kill", "resume", "help", "hub", "fetch", "stop"):
         assert need in cmds                                    # one unified menu (control + hub)
+    assert "flat" not in cmds                                  # /flat removed (redundant alias of /kill)
     assert len(cmds) == len(set(cmds))                         # no duplicate command entries
 
 

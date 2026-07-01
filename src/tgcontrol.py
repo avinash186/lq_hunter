@@ -27,7 +27,6 @@ COMMAND_MENU = [
     ("hub", "Restart the public UI link"),
     ("fetch", "Pull latest NQ & ES bars"),
     ("kill", "Flatten all & halt entries"),
-    ("flat", "Flatten all & halt (alias of /kill)"),
     ("resume", "Re-enable entries"),
     ("stop", "Emergency: switch execution to DRY"),
     ("help", "Show all commands"),

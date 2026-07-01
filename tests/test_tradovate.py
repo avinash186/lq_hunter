@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 
 import config
-from src import broker_accounts, tradovate, tradovate_exec, tgcontrol, topstep, notify, settings
+from src import broker_accounts, tradovate, tradovate_exec, tradovate_ws, broker_verify, tgcontrol, topstep, execution, notify, settings
 
 _ORIG_GET = tradovate._get          # capture before any test patches them
 _ORIG_POST = tradovate._post
@@ -325,6 +325,73 @@ def test_status_lines_show_tradovate():
     broker_accounts.add_account(lid, "100", "Micro-B", enabled=False)
     line = tgcontrol.tradovate_status_lines()
     assert "Tradovate: 2 account(s), 1 enabled" in line
+
+
+# ── real-time WebSocket (a) ──
+def test_ws_dispatch_position_and_fill():
+    login = {"id": "t1"}
+    pos, fills = [], []
+    on_pos = lambda lid, aid, cid, npos: pos.append((lid, aid, cid, npos))
+    on_fill = lambda lid, aid, cid, q, p, act: fills.append((aid, cid, q, p, act))
+    tradovate_ws._dispatch({"e": "props", "d": {"entityType": "position",
+        "entity": {"accountId": 99, "contractId": 5, "netPos": 0}}}, login, on_pos, on_fill)
+    assert pos == [("t1", 99, 5, 0)]                       # close event
+    tradovate_ws._dispatch({"e": "props", "d": {"entityType": "fill",
+        "entity": {"accountId": 99, "contractId": 5, "qty": 2, "price": 20000.0, "action": "Buy"}}},
+        login, on_pos, on_fill)
+    assert fills == [(99, 5, 2, 20000.0, "Buy")]
+    pos.clear()
+    tradovate_ws._dispatch({"d": {"positions": [{"accountId": 99, "contractId": 5, "netPos": 1}]}},
+                           login, on_pos, on_fill)
+    assert pos == [("t1", 99, 5, 1)]                       # initial snapshot array
+
+
+def test_exec_realtime_close_frees_slot():
+    _reset_accounts(); _reset_exec(); _silence()
+    lid = broker_accounts.add_login("tradovate", "TV", {"name": "n"})
+    broker_accounts.add_account(lid, "99", "Micro-A")
+    tradovate_exec._contracts[(lid, "NQ")] = {"id": 5, "name": "MNQM5"}
+    tradovate_exec._state[(lid, "99", "NQ")] = {"status": tradovate_exec.OPEN, "contract_id": 5}
+    tradovate_exec.on_position_event(lid, 99, 5, 0)        # broker closed the position
+    assert tradovate_exec._state[(lid, "99", "NQ")]["status"] == tradovate_exec.FLAT
+
+
+# ── cross-broker fill/flat verification ──
+def _verify_setup():
+    _reset_accounts(); _settings(execute=True)
+    sent = []
+    notify.send = lambda m, **k: sent.append(m) or True
+    execution.resolve_contract = lambda s: "CON.MNQ"
+    tradovate.configured = lambda lg: True
+    lid = broker_accounts.add_login("tradovate", "TV",
+                                    {"name": "n", "password": "p", "appId": "a", "cid": "1", "sec": "s"})
+    broker_accounts.add_account(lid, "99", "Micro-A")
+    tradovate_exec._contracts[(lid, "NQ")] = {"id": 5, "name": "MNQM5"}
+    return sent
+
+
+def test_verify_entry_confirms_and_flags_mismatch():
+    sent = _verify_setup()
+    topstep.search_open_positions = lambda a: [{"contractId": "CON.MNQ", "size": 2}]
+    tradovate.search_open_positions = lambda lg, aid: [{"contractId": 5, "netPos": 2}]
+    broker_verify._verify_entry("NQ", {"contracts": 2}, 0)          # both filled
+    assert any("entry fills confirmed" in m for m in sent)
+    sent.clear()
+    tradovate.search_open_positions = lambda lg, aid: []            # Tradovate did NOT fill
+    broker_verify._verify_entry("NQ", {"contracts": 2}, 0)
+    assert any("ENTRY FILL MISMATCH" in m for m in sent)
+
+
+def test_verify_exit_all_flat_then_desync():
+    sent = _verify_setup()
+    topstep.search_open_positions = lambda a: []
+    tradovate.search_open_positions = lambda lg, aid: []            # all flat
+    broker_verify._verify_exit("NQ", 0)
+    assert any("all brokers confirmed flat" in m for m in sent)
+    sent.clear()
+    tradovate.search_open_positions = lambda lg, aid: [{"contractId": 5, "netPos": 2}]  # still open!
+    broker_verify._verify_exit("NQ", 0)
+    assert any("EXIT DESYNC" in m for m in sent) and any("/kill" in m for m in sent)
 
 
 if __name__ == "__main__":

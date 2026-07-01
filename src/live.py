@@ -24,7 +24,7 @@ import time
 import pandas as pd
 
 import config
-from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify, execution, settings, tgcontrol, tradovate_exec
+from src import data_loader, fetcher, liquidity, topstep, score, signals, trades, notify, execution, settings, tgcontrol, tradovate_exec, broker_verify
 
 log = logging.getLogger("live")
 NY = "America/New_York"
@@ -156,11 +156,12 @@ class LiveEngine:
                 execution.reconcile_startup()
                 execution.start_user_hub()
                 tradovate_exec.reconcile_startup()        # additive: mirror for Tradovate accounts
+                tradovate_exec.start_user_streams()       # additive: real-time close detection (WS)
             except Exception:
                 log.exception("live: broker execution boot failed (continuing)")
         self._mkt_open = _market_open()                   # session-card transition tracker
         if notify.configured():                           # Telegram control surface
-            handlers = {"kill": self._cmd_kill, "flat": self._cmd_kill,
+            handlers = {"kill": self._cmd_kill,
                         "resume": self._cmd_resume, "status": tgcontrol.cmd_status,
                         "list": tgcontrol.cmd_list, "opt": tgcontrol.cmd_opt,
                         "add": tgcontrol.cmd_add, "acc": tgcontrol.cmd_acc,
@@ -404,6 +405,7 @@ class LiveEngine:
         # path below is untouched; a daemon thread => zero added latency to the Topstep order).
         threading.Thread(target=tradovate_exec.submit_all, args=(symbol, tr),
                          name="tv-fanout", daemon=True).start()
+        broker_verify.verify_entry(symbol, tr)            # additive: confirm consistent fills across brokers
         # Route to the broker; in LIVE mode only open the local (paper/UI) trade if the broker
         # actually took it — so the sim can never desync into a phantom trade. In DRY mode the
         # paper trade always opens (execution.submit sends the 🧪 alert).
@@ -460,6 +462,7 @@ class LiveEngine:
         self.broadcast({"e": "trade_close", "sym": symbol, **rec})
         emo = "✅" if R > 0 else "❌"
         notify.send_and_relay_trade(f"{emo} {symbol} {outcome.upper()}   R {R:+.2f}   P&L ${rec['pnl_usd']:+.0f}")
+        broker_verify.verify_exit(symbol)                # additive: confirm ALL brokers flat, else alert
 
     # ───────────── Telegram commands (/kill failsafe) ─────────────
     def _cmd_kill(self, chat_id=None):
