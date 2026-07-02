@@ -247,6 +247,9 @@ def cmd_list(chat_id=None):
                 lines.append(f"🟢 <code>{html.escape(aid)}</code> · {name}{bal_s}  ← connected")
             else:
                 lines.append(f"⚪ <code>{html.escape(aid)}</code> · {name}{bal_s}")
+        if cur not in {str(a.get("id")) for a in accts}:   # active id matches no real account
+            lines.append(f"⚠️ <b>active account {html.escape(cur)} is NOT in this list</b> — "
+                         f"orders may be misrouted; switch to a real account via /acc")
     elif topstep_err:
         lines.append(f"<b>Topstep accounts</b>\n⚠️ {html.escape(topstep_err)}")
     tv = _tradovate_list_lines()
@@ -298,6 +301,8 @@ def _acc_menu(note: str = ""):
             aid = str(a.get("id"))
             mark = "🟢" if aid == cur else "⚪"
             rows.append([{"text": f"{mark} {aid} {a.get('name', '')}"[:40], "callback_data": f"acc:ts:{aid}"}])
+        if cur not in {str(a.get("id")) for a in accts}:   # active id matches no real account → misrouted orders
+            rows.append([{"text": f"⚠️ active id {cur} not in list — tap a real account", "callback_data": "acc:noop"}])
     tv = broker_accounts.accounts()
     if tv:
         rows.append([{"text": "— Tradovate (toggle) —", "callback_data": "acc:noop"}])

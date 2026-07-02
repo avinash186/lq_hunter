@@ -127,6 +127,25 @@ def test_account_switch_when_flat():
     assert str(settings.account_id()) == "67890"
 
 
+def test_acc_and_list_warn_on_stale_active_id():
+    """Defensive: if the active account id matches NO real account (the '222' test-pollution
+    bug), /acc and /list must warn loudly instead of silently omitting the green mark."""
+    _reset()
+    from src import broker_accounts
+    broker_accounts._data = {"logins": []}                 # isolate from any local registry
+    topstep.search_accounts = lambda only_active=True: [{"id": 24257617, "name": "Live"}]
+    settings._data["account_id"] = "222"                   # stale/wrong id
+    _, rows = tgcontrol._route("acc:refresh", "12345")
+    flat = " ".join(b["text"] for row in rows for b in row)
+    assert "⚠️" in flat and "222" in flat                  # loud mismatch warning in /acc
+    assert "NOT in this list" in tgcontrol.cmd_list()      # and in /list
+    # when the active id DOES match a real account: green shows, no warning
+    settings._data["account_id"] = "24257617"
+    _, rows2 = tgcontrol._route("acc:refresh", "12345")
+    flat2 = " ".join(b["text"] for row in rows2 for b in row)
+    assert "🟢" in flat2 and "⚠️" not in flat2
+
+
 def test_every_menu_command_is_wired():
     """Guard: every command in the / menu resolves to a real handler (no 'unknown
     command'). Mirrors the handler map built in live.LiveEngine._boot."""
