@@ -26,3 +26,7 @@ data/bars/*.parquet.backadj
 *.iml
 data/ui_settings.json
 data/signals/
+
+# Tradovate demo API credentials (local only, NEVER commit)
+data/tv_demo_creds.json
+*tv_demo_creds*.json

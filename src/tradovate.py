@@ -197,8 +197,10 @@ def build_oso_payload(account_spec, account_id, contract_name, side: int, size: 
         "accountSpec": account_spec, "accountId": int(account_id),
         "action": _action(side), "symbol": contract_name,
         "orderQty": int(size), "orderType": "Market", "isAutomated": True,
-        "bracket1": {"action": exit_action, "orderType": "Limit", "price": tp_px},
-        "bracket2": {"action": exit_action, "orderType": "Stop", "stopPrice": sl_px},
+        # CME Rule 536-B / FIX Tag 1028: the OCO children are exchange orders originated by our
+        # algo too, so each carries isAutomated (don't rely on parent propagation).
+        "bracket1": {"action": exit_action, "orderType": "Limit", "price": tp_px, "isAutomated": True},
+        "bracket2": {"action": exit_action, "orderType": "Stop", "stopPrice": sl_px, "isAutomated": True},
     }
     if custom_tag:
         body["text"] = str(custom_tag)
@@ -247,9 +249,12 @@ def cancel_order(login: dict, order_id) -> dict | None:
 
 
 def liquidate_position(login: dict, account_id, contract_id) -> dict | None:
-    """Flatten a position (market close). Mirrors topstep.close_position."""
+    """Flatten a position (market close). Mirrors topstep.close_position. isAutomated=True:
+    even a /kill-triggered liquidation is ROUTED by our software, so it's an automated order
+    under CME Rule 536-B / Tag 1028 (verify the endpoint accepts the field on the demo)."""
     return _post(login, "/order/liquidatePosition",
-                 {"accountId": int(account_id), "contractId": int(contract_id), "admin": False})
+                 {"accountId": int(account_id), "contractId": int(contract_id),
+                  "admin": False, "isAutomated": True})
 
 
 def validate_token(login: dict) -> bool:

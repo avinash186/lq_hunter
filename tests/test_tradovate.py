@@ -17,6 +17,7 @@ from src import broker_accounts, tradovate, tradovate_exec, tradovate_ws, broker
 
 _ORIG_GET = tradovate._get          # capture before any test patches them
 _ORIG_POST = tradovate._post
+_ORIG_LIQUIDATE = tradovate.liquidate_position   # a later fan-out test mocks this; keep the real one
 _ORIG_ENABLED = broker_accounts.enabled_targets
 
 LOGIN = {"id": "t1", "creds": {"name": "n", "password": "p", "appId": "a", "cid": "1", "sec": "s"}}
@@ -90,8 +91,10 @@ def test_oso_payload_long_short_absolute_prices():
                                     entry_px=20000.0, sl_pts=75.0, tp_pts=61.0, tick=0.25, custom_tag="NQ-1")
     assert p["action"] == "Buy" and p["orderType"] == "Market" and p["orderQty"] == 2
     assert p["isAutomated"] is True and p["accountId"] == 99 and p["accountSpec"] == "ACCT"
-    assert p["bracket1"] == {"action": "Sell", "orderType": "Limit", "price": 20061.0}      # TP above (ABSOLUTE)
-    assert p["bracket2"] == {"action": "Sell", "orderType": "Stop", "stopPrice": 19925.0}   # SL below (ABSOLUTE)
+    assert p["bracket1"] == {"action": "Sell", "orderType": "Limit", "price": 20061.0, "isAutomated": True}      # TP above (ABSOLUTE)
+    assert p["bracket2"] == {"action": "Sell", "orderType": "Stop", "stopPrice": 19925.0, "isAutomated": True}   # SL below (ABSOLUTE)
+    # CME Rule 536-B / Tag 1028: EVERY algo-originated order (entry + both children) must be flagged
+    assert p["bracket1"]["isAutomated"] is True and p["bracket2"]["isAutomated"] is True
     assert p["text"] == "NQ-1"
     s = tradovate.build_oso_payload("A", 1, "MESM5", side=0, size=1,
                                     entry_px=5000.0, sl_pts=10.0, tp_pts=8.0, tick=0.25, custom_tag=None)
@@ -102,6 +105,19 @@ def test_oso_payload_long_short_absolute_prices():
 
 def test_action_mapping():
     assert tradovate._action(1) == "Buy" and tradovate._action(0) == "Sell"
+
+
+def test_liquidate_flags_automated():
+    """CME Tag 1028: a /kill-triggered liquidation is still ROUTED by software -> automated."""
+    cap = {}
+    orig = tradovate._post
+    tradovate._post = lambda login, path, body: cap.update(path=path, body=body) or {"ok": True}
+    try:
+        _ORIG_LIQUIDATE(LOGIN, 99, 5)                 # the real function (tests may have mocked the module attr)
+    finally:
+        tradovate._post = orig
+    assert cap["path"] == "/order/liquidatePosition"
+    assert cap["body"]["isAutomated"] is True and cap["body"]["accountId"] == 99
 
 
 def test_client_placeholder_safe_no_network():
