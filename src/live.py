@@ -164,7 +164,7 @@ class LiveEngine:
             handlers = {"kill": self._cmd_kill,
                         "resume": self._cmd_resume, "status": tgcontrol.cmd_status,
                         "list": tgcontrol.cmd_list, "opt": tgcontrol.cmd_opt,
-                        "add": tgcontrol.cmd_add, "acc": tgcontrol.cmd_acc,
+                        "acc": tgcontrol.cmd_acc,
                         "stop": tgcontrol.cmd_stop, "health": self._cmd_health,
                         "help": tgcontrol.cmd_help}
             try:                                          # /hub /fetch -> the same poller

@@ -268,33 +268,18 @@ def test_list_keeps_topstep_and_appends_tradovate():
     assert "Micro-A" in txt and "awaiting API key" in txt                       # account by NAME + balance state
 
 
-def test_add_flow_new_login_end_to_end():
+def test_local_registration_primitives():
+    """Accounts are registered LOCALLY (tools/add_account.py) — no /add over Telegram. This
+    covers the underlying primitives the helper uses: add_login + add_account, DISABLED default."""
     _reset_accounts(); _silence()
-    chat = 55
-    tgcontrol.cmd_add(chat)                                    # step 1: broker keyboard
-    t, rows = tgcontrol._route("add:newlogin", chat)          # new login -> prompt creds
-    assert tgcontrol._pending[str(chat)] == "add_creds"
-    tgcontrol.on_text("joe,pw,app,1234,secret,dev,live", chat)
-    assert tgcontrol._pending[str(chat)] == "add_acctid"
-    tgcontrol.on_text("99", chat)
-    assert tgcontrol._pending[str(chat)] == "add_name"
-    tgcontrol.on_text("Micro-A", chat)                        # finalize
-    got = broker_accounts.find_account_by_name("Micro-A")
-    assert got is not None and got[1]["id"] == "99"
-    assert got[0]["creds"]["name"] == "joe" and got[0]["creds"]["live"] is True
-    assert got[0]["broker"] == "tradovate"
-
-
-def test_add_flow_existing_login_reuses_creds():
-    _reset_accounts(); _silence()
-    lid = broker_accounts.add_login("tradovate", "TV", {"name": "x"})
-    chat = 56
-    tgcontrol._route(f"add:login:{lid}", chat)                # pick existing -> skip creds
-    assert tgcontrol._pending[str(chat)] == "add_acctid"
-    tgcontrol.on_text("222", chat)
-    tgcontrol.on_text("Micro-B", chat)
-    assert broker_accounts.find_account_by_name("Micro-B")[1]["id"] == "222"
-    assert len(broker_accounts.logins()) == 1                 # reused, no new login
+    lid = broker_accounts.add_login("tradovate", "Tradovate · joe",
+                                    {"name": "joe", "password": "pw", "appId": "app", "cid": "1", "sec": "s"})
+    broker_accounts.add_account(lid, "56461409", name="DEMO677946", enabled=False)   # dormant until /acc
+    got = broker_accounts.find_account_by_name("DEMO677946")
+    assert got is not None and got[1]["id"] == "56461409"
+    assert got[1].get("enabled") is False                     # not live until enabled via /acc
+    assert got[0]["creds"]["name"] == "joe" and got[0]["broker"] == "tradovate"
+    assert broker_accounts.enabled_targets() == []           # disabled -> not in the fan-out set
 
 
 def test_acc_toggles_tradovate_account():

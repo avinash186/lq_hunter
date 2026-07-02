@@ -22,7 +22,6 @@ TV_INC_PRESETS = (2000, 4000, 6000)       # Tradovate: account $ per additional 
 COMMAND_MENU = [
     ("opt", "View & edit settings"),
     ("acc", "Accounts — tap to switch/enable/disable"),
-    ("add", "Add a broker account (Tradovate)"),
     ("status", "Live status + hub link"),
     ("health", "Feed / position / broker health"),
     ("list", "Broker accounts (Topstep + Tradovate)"),
@@ -34,7 +33,6 @@ COMMAND_MENU = [
     ("help", "Show all commands"),
 ]
 _pending: dict[str, str] = {}            # chat_id -> awaited input key
-_add: dict[str, dict] = {}               # chat_id -> in-progress /add session
 _BACK = {"text": "‹ Back", "callback_data": "opt:menu"}
 _CANCEL = {"text": "✖️ Cancel", "callback_data": "opt:close"}
 _NAV = [_BACK, _CANCEL]                   # back + cancel row for every sub-menu
@@ -308,7 +306,7 @@ def _acc_menu(note: str = ""):
             rows.append([{"text": f"{mark} {ac.get('name')}"[:40],
                           "callback_data": f"acc:tv:{lg['id']}:{ac['id']}"}])
     if not accts and not tv:
-        rows.append([{"text": "No accounts — use /add", "callback_data": "acc:noop"}])
+        rows.append([{"text": "No accounts — add locally (tools/add_account.py)", "callback_data": "acc:noop"}])
     rows.append([{"text": "🔄 Refresh", "callback_data": "acc:refresh"}, _CANCEL])
     return head, rows
 
@@ -319,42 +317,8 @@ def cmd_acc(chat_id) -> None:
     return None
 
 
-# ── /add: register a broker account (Tradovate only for now) ──
-def cmd_add(chat_id) -> None:
-    """Step 1: pick a broker. Only Tradovate is offered (Topstep is native)."""
-    rows = [[{"text": "Tradovate", "callback_data": "add:broker:tradovate"}], [_CANCEL]]
-    notify.send_keyboard(chat_id, "➕ <b>Add a broker account</b>\n\nPick a broker:", rows)
-    return None
-
-
-def _add_broker_menu(chat):
-    """Step 2 (Tradovate): pick an existing login to add an account to, or a new login."""
-    logins = [l for l in broker_accounts.logins() if l.get("broker") == "tradovate"]
-    rows = [[{"text": f"➕ to: {l.get('label', l['id'])}"[:40], "callback_data": f"add:login:{l['id']}"}]
-            for l in logins]
-    rows.append([{"text": "🆕 New Tradovate login", "callback_data": "add:newlogin"}])
-    rows.append([_CANCEL])
-    head = ("Add an account to an existing login, or create a new one:"
-            if logins else "No Tradovate logins yet — create one:")
-    return "Tradovate · " + head, rows
-
-
-def _add_finalize(chat) -> str:
-    sess = _add.pop(str(chat), None)
-    if not sess:
-        return "Session expired — tap /add to retry."
-    try:
-        login_id = sess.get("login_id")
-        if sess.get("mode") == "new":   # create the login lazily (no orphan on abandon)
-            login_id = broker_accounts.add_login(
-                "tradovate", f"Tradovate · {sess['creds'].get('name') or 'login'}", sess["creds"])
-        broker_accounts.add_account(login_id, sess["acct_id"], sess["name"], enabled=True)
-    except Exception as e:               # noqa: BLE001
-        return f"⚠️ Could not add account: {e}"
-    mode = "🟢 LIVE" if settings.execute_broker() else "🧪 DRY"
-    return (f"✅ Added Tradovate account <b>{html.escape(sess['name'])}</b>. It now mirrors the live "
-            f"order flow with the current settings (max risk ${settings.max_risk():.0f}, mode {mode}).\n"
-            f"See /list. Orders route here automatically once your API key is set and mode is LIVE.")
+# Broker accounts are registered LOCALLY (never over Telegram — credentials must not transit
+# a chat). Use tools/add_account.py on the trading machine; then manage them live via /acc.
 
 
 # ── interactive callbacks / pending input ──
@@ -425,20 +389,6 @@ def _route(data: str, chat):
         new = broker_accounts.toggle_account(login_id, acct_id)
         state = "enabled 🟢" if new else ("disabled ⚪" if new is not None else "not found")
         return _acc_menu(f"✅ Tradovate account {state}")
-    # ── /add routing ──
-    if data == "add:broker:tradovate":
-        return _add_broker_menu(chat)
-    if data == "add:newlogin":
-        _add[str(chat)] = {"broker": "tradovate", "mode": "new"}
-        _pending[str(chat)] = "add_creds"
-        return ("Send your Tradovate login as ONE comma-separated line:\n"
-                "name,password,appId,cid,sec,deviceId,live\n\n"
-                "(deviceId optional; live='live' for the live host, else demo. Placeholders are "
-                "fine now — update later when your API key is ready.)", [[_CANCEL]])
-    if data.startswith("add:login:"):
-        _add[str(chat)] = {"broker": "tradovate", "mode": "existing", "login_id": data.split(":", 2)[2]}
-        _pending[str(chat)] = "add_acctid"
-        return ("Send the Tradovate ACCOUNT ID (numeric) to add to this login.", [[_CANCEL]])
     return _opt_menu()
 
 
@@ -460,8 +410,6 @@ def on_text(text: str, chat) -> None:
         _on_tv_num("tv_min_for_2", text, chat, lo=1000, hi=1_000_000)
     elif key == "tv_inc":
         _on_tv_num("tv_increment", text, chat, lo=500, hi=1_000_000)
-    elif key in ("add_creds", "add_acctid", "add_name"):
-        _on_add_text(key, text, chat)
 
 
 def _on_max_risk(text: str, chat) -> None:
@@ -493,28 +441,3 @@ def _on_tv_num(setting_key: str, text: str, chat, lo: float, hi: float) -> None:
     notify.send_keyboard(chat, t, rows)
 
 
-def _on_add_text(key: str, text: str, chat) -> None:
-    sess = _add.get(str(chat))
-    if sess is None:
-        return
-    text = text.strip()
-    if key == "add_creds":
-        parts = [p.strip() for p in text.split(",")]
-        if len(parts) < 5:
-            _add.pop(str(chat), None)
-            notify.send_to(chat, "Need at least name,password,appId,cid,sec — tap /add to retry.")
-            return
-        ks = ["name", "password", "appId", "cid", "sec", "deviceId", "live"]
-        creds = {k: (parts[i] if i < len(parts) else "") for i, k in enumerate(ks)}
-        creds["appVersion"] = "1.0"
-        creds["live"] = str(creds.get("live", "")).lower() in ("live", "true", "1", "yes")
-        sess["creds"] = creds
-        _pending[str(chat)] = "add_acctid"
-        notify.send_to(chat, "Credentials saved. Now send the Tradovate ACCOUNT ID (numeric).")
-    elif key == "add_acctid":
-        sess["acct_id"] = text
-        _pending[str(chat)] = "add_name"
-        notify.send_to(chat, "And a NAME for this account (shown in /list), e.g. Micro-A.")
-    elif key == "add_name":
-        sess["name"] = (text[:40] or sess.get("acct_id", "acct"))
-        notify.send_to(chat, _add_finalize(chat), parse_mode="HTML")

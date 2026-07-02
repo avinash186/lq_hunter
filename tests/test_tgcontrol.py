@@ -134,7 +134,7 @@ def test_every_menu_command_is_wired():
     from src import live
     menu = {c[0] for c in tgcontrol.COMMAND_MENU}
     handlers = {}
-    handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help", "stop", "add", "acc")})
+    handlers.update({c: getattr(tgcontrol, "cmd_" + c) for c in ("opt", "list", "status", "help", "stop", "acc")})
     handlers.update({c: getattr(bot, "cmd_" + c) for c in ("hub", "fetch")})
     handlers.update({"kill": live.LiveEngine._cmd_kill,
                      "resume": live.LiveEngine._cmd_resume, "health": live.LiveEngine._cmd_health})
@@ -179,9 +179,10 @@ def test_command_menu_is_valid():
     for cmd, desc in tgcontrol.COMMAND_MENU:
         assert re.match(r"^[a-z0-9_]{1,32}$", cmd), cmd        # Telegram command rules
         assert 1 <= len(desc) <= 256
-    for need in ("opt", "acc", "add", "list", "status", "kill", "resume", "help", "hub", "fetch", "stop"):
+    for need in ("opt", "acc", "list", "status", "kill", "resume", "help", "hub", "fetch", "stop"):
         assert need in cmds                                    # one unified menu (control + hub)
     assert "flat" not in cmds                                  # /flat removed (redundant alias of /kill)
+    assert "add" not in cmds                                   # /add removed — accounts registered locally (no creds over Telegram)
     assert len(cmds) == len(set(cmds))                         # no duplicate command entries
 
 
