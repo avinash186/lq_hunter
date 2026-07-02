@@ -30,3 +30,7 @@ data/signals/
 # Tradovate demo API credentials (local only, NEVER commit)
 data/tv_demo_creds.json
 *tv_demo_creds*.json
+
+# Broker account registry — contains credentials, local only
+data/broker_accounts.json
+data/broker_accounts.json.tmp
