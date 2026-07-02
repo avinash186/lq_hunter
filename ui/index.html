@@ -75,7 +75,8 @@
         </select>
         <div class="cx-tools">
           <button class="cx-tool active" id="cx-levels-btn" title="Liquidity levels">Liq</button>
-          <button class="cx-tool active" id="cx-sig-toggle" title="Model signals (Stage-1 score)">Sig</button>
+          <button class="cx-tool active" id="cx-sig-toggle" title="Model signals (Stage-1 direction score)">Sig</button>
+          <button class="cx-tool" id="cx-conf-toggle" title="Meta-confidence (Stage-2 gate score) pane">Conf</button>
           <button class="cx-tool active" id="cx-trades-toggle" title="Trade positions (liquidity-level exit)">Trd</button>
           <select id="cx-trade-model" class="cx-model-sel" title="View a model's historical trades (does NOT change the live model — set that on Lab &rarr; Models)">
             <option value="">Live model</option>
@@ -101,6 +102,7 @@
         <button class="cx-signav" id="cx-sig-prev" title="Jump to previous signal">&#8249;</button>
         <button class="cx-signav" id="cx-sig-next" title="Jump to next signal">&#8250;</button>
         <div id="cx-score-axis" title="Drag to zoom the score scale · double-click / double-tap for auto-fit"></div>
+        <div id="cx-conf-axis" title="Drag to zoom the confidence scale · double-click / double-tap for auto-fit"></div>
         <div class="cx-settings" id="cx-settings">
           <div class="cx-set-title">Chart Settings</div>
           <div class="cx-set-row"><label>Up color</label><input type="color" id="cx-up" value="#26a69a"></div>
@@ -111,6 +113,9 @@
           <div class="cx-set-title" style="margin-top:16px">Signal Pane</div>
           <div class="cx-set-row"><label>Pane size</label><input type="range" id="cx-score-band" min="10" max="50"><span class="cx-set-op-val" id="cx-score-band-val"></span></div>
           <div class="cx-set-row"><label>Legend opacity</label><input type="range" id="cx-leg-op" min="20" max="100"><span class="cx-set-op-val" id="cx-leg-op-val"></span></div>
+          <div class="cx-set-title" style="margin-top:16px">Confidence Pane</div>
+          <div class="cx-set-row"><label>Pane size</label><input type="range" id="cx-conf-band" min="10" max="50"><span class="cx-set-op-val" id="cx-conf-band-val"></span></div>
+          <div class="cx-sl-thr"><span class="cx-sl-sw" style="background:#c9a227"></span>Meta gate (fixed)<b class="cx-thr-val" id="cx-conf-thr">—</b></div>
           <div class="cx-sl-head">Midline — color · width · style</div>
           <div class="cx-sl-row"><input type="checkbox" id="cx-sl-mid-on"><span class="cx-sl-name">Mid</span><input type="color" id="cx-sl-mid-color"><input type="number" class="cx-sl-w" id="cx-sl-mid-w" min="1" max="5"><select class="cx-sl-st" id="cx-sl-mid-style"><option value="solid">solid</option><option value="dashed">dash</option><option value="dotted">dot</option></select></div>
           <div class="cx-sl-head" style="margin-top:10px">Model gate thresholds (fixed)</div>

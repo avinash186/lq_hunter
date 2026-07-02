@@ -25,7 +25,7 @@
     try {
       fetch('/api/settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cx: S, cxlevels: LV, cxscore: SCORE, cxtrades: TRADES }),
+        body: JSON.stringify({ cx: S, cxlevels: LV, cxscore: SCORE, cxconf: CONF, cxtrades: TRADES }),
       }).catch(function () {});
     } catch (e) {}
   }
@@ -49,6 +49,13 @@
       if (sc.legendOp != null) SCORE.legendOp = sc.legendOp;
       if (sc.view && typeof sc.view.lo === 'number') { scoreView.lo = sc.view.lo; scoreView.hi = sc.view.hi; }
       if (sc.lines) ['mid', 'up', 'down'].forEach(function (k) { if (sc.lines[k]) Object.assign(SCORE.lines[k], sc.lines[k]); });
+    }
+    var cf = srv.cxconf;
+    if (cf) {
+      if (typeof cf.on === 'boolean') CONF.on = cf.on;
+      if (cf.band) CONF.band = cf.band;
+      if (typeof cf.auto === 'boolean') CONF.auto = cf.auto;
+      if (cf.view && typeof cf.view.lo === 'number') { confView.lo = cf.view.lo; confView.hi = cf.view.hi; }
     }
     var tr = srv.cxtrades;
     if (tr) {
@@ -190,6 +197,7 @@
       scheduleRangeSave();
     });
     wireScore();
+    wireConf();
     wireTrades();
     initEquity();
     chart.subscribeCrosshairMove(function (param) {
@@ -322,13 +330,17 @@
     var col = b.close >= b.open ? S.up : S.down;
     var f = function (v) { return (+v).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
     var sig = '';
-    if (SCORE.on && S.tf === '1m' && scoreData.length) {
+    if ((SCORE.on || CONF.on) && S.tf === '1m' && scoreData.length) {
       var tt = (t != null) ? t : b.time, sg = null;
       for (var i = scoreData.length - 1; i >= 0; i--) { if (scoreData[i].time <= tt) { sg = scoreData[i]; break; } }
       if (sg && Math.abs(sg.time - tt) <= 60) {
         var sc = sg.side === 1 ? S.up : S.down;
-        sig = '<span class="cx-leg-tf">p(up) <b style="color:' + sc + '">' + sg.p_up.toFixed(3) + '</b>' +
-              (sg.fire ? (sg.side === 1 ? ' ▲ LONG' : ' ▼ SHORT') : '') + '</span>';
+        if (SCORE.on)
+          sig += '<span class="cx-leg-tf">p(up) <b style="color:' + sc + '">' + sg.p_up.toFixed(3) + '</b>' +
+                 (sg.fire ? (sg.side === 1 ? ' ▲ LONG' : ' ▼ SHORT') : '') + '</span>';
+        if (CONF.on && sg.p_conf != null)
+          sig += '<span class="cx-leg-tf">conf <b style="color:' + (sg.p_conf >= confGate ? sc : '#8892a4') + '">' +
+                 sg.p_conf.toFixed(3) + '</b></span>';
       }
     }
     el.innerHTML =
@@ -604,6 +616,23 @@
     return d;
   })();
   function saveScore() { localStorage.setItem('cxscore', JSON.stringify(SCORE)); scheduleServerSave(); }
+  // ── Confidence pane (Stage-2 meta score p_conf) — a second oscillator that mirrors the
+  //    p(up) pane, stacked directly above it; shares scoreData (rows carry p_conf too). ──
+  var CONF = (function () {
+    var d = { on: false, band: 0.20, auto: true, view: { lo: 0, hi: 1 } };
+    var s = JSON.parse(localStorage.getItem('cxconf') || 'null');
+    if (s) {
+      d.on = !!s.on;
+      if (s.band) d.band = s.band;
+      if (typeof s.auto === 'boolean') d.auto = s.auto;
+      if (s.view && typeof s.view.lo === 'number') d.view = s.view;
+    }
+    return d;
+  })();
+  function saveConf() { localStorage.setItem('cxconf', JSON.stringify(CONF)); scheduleServerSave(); }
+  var confView = CONF.view, confCurView = { lo: 0, hi: 1 };
+  var confGate = 0.6;                          // meta fire threshold (best_q) — from the server
+  var confGeom = null;                         // px of the conf pane (for its y-axis drag zone)
   var scoreView = SCORE.view;                 // manual y-zoom (persisted, used when SCORE.auto=false)
   var curView = { lo: 0, hi: 1 };             // the view actually drawn (auto or manual)
   // Auto-fit: visible data + the threshold lines fill ~75% of the pane; the
@@ -630,11 +659,14 @@
   // candles/levels never overlap it. Restore normal layout when off / not on 1m.
   function applyScoreLayout() {
     if (!chart || !candle || !volume) return;
-    var on = SCORE.on && S.tf === '1m';
-    candle.priceScale().applyOptions({ scaleMargins: on
-      ? { top: 0.05, bottom: SCORE.band + VOL_FRAC } : { top: 0.08, bottom: 0.02 } });
-    volume.priceScale().applyOptions({ scaleMargins: on
-      ? { top: 1 - SCORE.band - VOL_FRAC, bottom: SCORE.band } : { top: 0.82, bottom: 0 } });
+    var m1 = S.tf === '1m';
+    var sB = (SCORE.on && m1) ? SCORE.band : 0;   // p(up) pane, anchored at the very bottom
+    var cB = (CONF.on && m1) ? CONF.band : 0;     // conf pane, stacked directly above it
+    var tot = sB + cB, anyOn = tot > 0;
+    candle.priceScale().applyOptions({ scaleMargins: anyOn
+      ? { top: 0.05, bottom: tot + VOL_FRAC } : { top: 0.08, bottom: 0.02 } });
+    volume.priceScale().applyOptions({ scaleMargins: anyOn
+      ? { top: 1 - tot - VOL_FRAC, bottom: tot } : { top: 0.82, bottom: 0 } });
   }
   function applyLegendOpacity() {   // controls the liquidity-zone legend (bottom)
     var el = $('cx-label-legend'); if (el) el.style.opacity = (SCORE.legendOp / 100).toFixed(2);
@@ -658,6 +690,7 @@
       if (my !== scoreReq) return;
       scoreData = d.scores || [];
       if (d.gate) { scoreGate = d.gate; updateThrLabels(); }
+      if (d.conf_gate != null) { confGate = d.conf_gate; updateConfThr(); }
       scoreCache = { key: skey, from: Math.floor(vfrom - pad), to: Math.ceil(vto + pad) };
       redrawLevels();                   // band/columns redraw here; arrows are trade-driven
     }).catch(function () {});
@@ -944,7 +977,7 @@
   }
   function applyScore(ev) {
     if (S.tf !== '1m') return;
-    var row = { time: ev.time, p_up: ev.p_up, side: ev.side, fire: ev.fire };
+    var row = { time: ev.time, p_up: ev.p_up, p_conf: ev.p_conf, side: ev.side, fire: ev.fire };
     // replace any existing entry for this bar (avoids a duplicate column/marker —
     // the bar may already be present from the fetched history/live file); live wins.
     var i = scoreData.length - 1;
@@ -1026,6 +1059,126 @@
     });
     ctx.font = '9px system-ui';
     ctx.fillStyle = hexToRgba('#8892a4', 0.9); ctx.fillText('p(up)', 4, y0 + 11);
+  }
+  // ── Confidence pane — mirrors redrawScore for p_conf, stacked directly ABOVE the p(up)
+  //    pane, with a single dotted line at the model's meta gate (best_q). ──
+  function computeConfAutoView(rightX) {
+    var lo = Math.min(confGate, 0.5), hi = Math.max(confGate, 0.5);
+    for (var i = 0; i < scoreData.length; i++) {
+      var s = scoreData[i]; if (s.time === formingTime || s.p_conf == null) continue;
+      var x = timeToX(s.time); if (x == null || x < 0 || x > rightX) continue;
+      if (s.p_conf < lo) lo = s.p_conf; if (s.p_conf > hi) hi = s.p_conf;
+    }
+    var pad = Math.max(hi - lo, 0.06) * ((1 / 0.75) - 1) / 2;
+    return { lo: Math.max(0, lo - pad), hi: Math.min(1, hi + pad) };
+  }
+  function positionConfAxis() {
+    var ax = $('cx-conf-axis'); if (!ax) return;
+    if (!confGeom || !CONF.on || S.tf !== '1m') { ax.style.display = 'none'; return; }
+    ax.style.display = 'block';
+    ax.style.top = Math.round(confGeom.y0) + 'px';
+    ax.style.height = Math.round(confGeom.band) + 'px';
+    ax.style.left = Math.round(confGeom.rightX) + 'px';
+    ax.style.width = Math.max(0, Math.round(confGeom.fullW - confGeom.rightX)) + 'px';
+  }
+  function redrawConf(ctx, c, rightX) {
+    if (!CONF.on || S.tf !== '1m') { confGeom = null; positionConfAxis(); return; }
+    var axisH = chart.timeScale().height() || 28;
+    var plotH = c.clientHeight - axisH;
+    var scoreB = (SCORE.on && S.tf === '1m') ? plotH * SCORE.band : 0;   // p(up) pane sits below
+    var band = plotH * CONF.band, y1 = plotH - scoreB, y0 = y1 - band;
+    confGeom = { y0: y0, y1: y1, band: band, rightX: rightX, fullW: c.clientWidth }; positionConfAxis();
+    var view = CONF.auto ? computeConfAutoView(rightX) : confView; confCurView = view;
+    var lo = view.lo, hi = view.hi, rng = (hi - lo) || 1;
+    var yFor = function (p) { return y1 - ((p - lo) / rng) * band; };
+    var bg = S.theme === 'light' ? '#ffffff' : '#080a12';
+    ctx.fillStyle = bg; ctx.fillRect(0, y0, c.clientWidth, band);
+    ctx.setLineDash([]); ctx.lineWidth = 1; ctx.strokeStyle = hexToRgba('#8892a4', 0.4);
+    ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(c.clientWidth, y0); ctx.stroke();   // top separator
+    // the model's meta gate — a dotted threshold line at best_q
+    if (confGate >= lo && confGate <= hi) {
+      var yt = yFor(confGate);
+      ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(0, yt); ctx.lineTo(rightX, yt); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // p_conf columns from 0.5 (fired = solid side color, else faint); skip the forming bar
+    var mid05 = yFor(0.5);
+    for (var i = 0; i < scoreData.length; i++) {
+      var s = scoreData[i]; if (s.time === formingTime || s.p_conf == null) continue;
+      var x = timeToX(s.time); if (x == null || x < 0 || x > rightX) continue;
+      var yv = Math.max(y0, Math.min(y1, yFor(s.p_conf)));
+      ctx.fillStyle = s.fire ? (s.side === 1 ? S.up : S.down) : hexToRgba('#8892a4', 0.32);
+      ctx.fillRect(x - 0.6, Math.min(mid05, yv), 1.4, Math.max(1, Math.abs(yv - mid05)));
+    }
+    // right y-axis tick labels (skip one near the gate line), then the gate value
+    ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+    niceTicks(lo, hi).forEach(function (p) {
+      var yy = yFor(p); if (yy < y0 - 1 || yy > y1 + 1) return;
+      if (Math.abs(confGate - p) < 0.02) return;
+      ctx.fillStyle = bg; ctx.fillRect(rightX + 1, yy - 6, 36, 12);
+      ctx.fillStyle = hexToRgba('#8892a4', 0.95); ctx.fillText(p.toFixed(2), rightX + 4, yy + 3);
+    });
+    if (confGate >= lo && confGate <= hi) {
+      var yg = yFor(confGate);
+      ctx.font = 'bold 9px system-ui';
+      ctx.fillStyle = bg; ctx.fillRect(rightX + 1, yg - 6, 36, 12);
+      ctx.fillStyle = '#c9a227'; ctx.fillText(confGate.toFixed(2), rightX + 4, yg + 3);
+    }
+    ctx.font = '9px system-ui';
+    ctx.fillStyle = hexToRgba('#8892a4', 0.9); ctx.fillText('conf', 4, y0 + 11);
+  }
+  function updateConfThr() { var e = $('cx-conf-thr'); if (e) e.textContent = confGate.toFixed(3); }
+  function wireConf() {
+    var b = $('cx-conf-toggle');
+    if (b) {
+      b.classList.toggle('active', CONF.on);
+      b.onclick = function () {
+        CONF.on = !CONF.on; saveConf();
+        b.classList.toggle('active', CONF.on);
+        applyScoreLayout(); positionConfAxis(); redrawLevels();
+      };
+    }
+    wireConfAxis(); wireConfSettings();
+  }
+  function wireConfSettings() {
+    var band = $('cx-conf-band');
+    if (band) {
+      band.value = Math.round(CONF.band * 100); $('cx-conf-band-val').textContent = Math.round(CONF.band * 100) + '%';
+      band.oninput = function () { CONF.band = Math.max(0.1, Math.min(0.5, +this.value / 100)); $('cx-conf-band-val').textContent = Math.round(CONF.band * 100) + '%'; saveConf(); applyScoreLayout(); redrawLevels(); };
+    }
+    updateConfThr();
+  }
+  // drag the conf y-axis to zoom; double-click / double-tap resets to auto-fit
+  function wireConfAxis() {
+    var ax = $('cx-conf-axis'); if (!ax || ax._wired) return; ax._wired = true;
+    var dragging = false, lastY = 0, lastTap = 0;
+    function beginDrag(y) {
+      if (CONF.auto) { confView.lo = confCurView.lo; confView.hi = confCurView.hi; CONF.auto = false; }
+      dragging = true; lastY = y;
+    }
+    function zoom(dy) {
+      var cc = (confView.lo + confView.hi) / 2, half = (confView.hi - confView.lo) / 2;
+      half = Math.max(0.03, Math.min(0.5, half * (1 + dy * 0.004)));
+      confView.lo = Math.max(0, cc - half); confView.hi = Math.min(1, cc + half);
+      redrawLevels();
+    }
+    function resetAuto() { CONF.auto = true; saveConf(); redrawLevels(); }
+    ax.addEventListener('mousedown', function (e) { beginDrag(e.clientY); e.preventDefault(); });
+    window.addEventListener('mousemove', function (e) { if (dragging) zoom(e.movementY); });
+    window.addEventListener('mouseup', function () { if (dragging) { dragging = false; saveConf(); } });
+    ax.addEventListener('dblclick', resetAuto);
+    ax.addEventListener('touchstart', function (e) {
+      var now = Date.now();
+      if (now - lastTap < 300) { resetAuto(); lastTap = 0; e.preventDefault(); return; }
+      lastTap = now;
+      if (e.touches.length) { beginDrag(e.touches[0].clientY); e.preventDefault(); }
+    }, { passive: false });
+    ax.addEventListener('touchmove', function (e) {
+      if (!dragging || !e.touches.length) return;
+      var y = e.touches[0].clientY; zoom(y - lastY); lastY = y; e.preventDefault();
+    }, { passive: false });
+    ax.addEventListener('touchend', function () { if (dragging) { dragging = false; saveConf(); } });
   }
   function wireScore() {
     var b = $('cx-sig-toggle');
@@ -1223,6 +1376,7 @@
     drawTrades(ctx, rightX);
     drawLabels(ctx, labels);
     redrawScore(ctx, c, rightX);
+    redrawConf(ctx, c, rightX);
   }
 
   // ── settings panel ──

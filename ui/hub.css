@@ -529,7 +529,7 @@ td.c-green,.c-green{color:var(--green)}
 .cx-signav:hover{color:var(--accent);border-color:var(--am);background:var(--ad)}
 #cx-sig-prev{right:130px}
 #cx-sig-next{right:164px}
-#cx-score-axis{position:absolute;z-index:6;cursor:ns-resize;display:none;touch-action:none}
+#cx-score-axis,#cx-conf-axis{position:absolute;z-index:6;cursor:ns-resize;display:none;touch-action:none}
 .cx-sl-head{font-size:9.5px;color:var(--t3);margin:9px 0 6px}
 .cx-sl-row{display:flex;align-items:center;gap:5px;margin-bottom:7px}
 .cx-sl-name{font-size:11px;color:var(--t2);width:34px}

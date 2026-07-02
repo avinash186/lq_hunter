@@ -371,7 +371,8 @@ class LiveEngine:
         res = score.live_score(symbol, win, partner_pos=self._last_pos.get(partner, 0.0))
         self._last_pos[symbol] = res["pos_in_bracket"]
         self.broadcast({"e": "model_score", "sym": symbol, "time": bar["start"],
-                        "p_up": round(res["p_up"], 4), "side": res["side"], "fire": res["fire"]})
+                        "p_up": round(res["p_up"], 4), "p_conf": round(res["p_conf"], 4),
+                        "side": res["side"], "fire": res["fire"]})
         signals.append(symbol, {"ts": bar["start"], "p_up": res["p_up"],
                                 "p_conf": res["p_conf"], "side": res["side"], "fire": res["fire"]})
         try:

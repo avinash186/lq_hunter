@@ -298,11 +298,12 @@ def scores(symbol: str, frm: int | None = Query(None, alias="from"),
         out = [{"time": int(r.ts), "side": int(r.side)} for r in df.itertuples()]
         return JSONResponse({"symbol": symbol, "scores": out})
     df = signals.load_for_model(symbol, model, frm, to)
-    out = [{"time": int(r.ts), "p_up": float(r.p_up), "side": int(r.side), "fire": bool(r.fire)}
+    out = [{"time": int(r.ts), "p_up": float(r.p_up), "p_conf": float(r.p_conf),
+            "side": int(r.side), "fire": bool(r.fire)}
            for r in df.itertuples()]
     resolved = registry.active_name() if (not model or model == "live") else model
     return JSONResponse({"symbol": symbol, "scores": out, "gate": _gate_thr(symbol, model),
-                         "model": resolved})
+                         "conf_gate": _conf_gate(model), "model": resolved})
 
 
 def _model_stats(name: str) -> dict:
@@ -438,6 +439,26 @@ def _gate_thr(symbol: str, model: str = "") -> dict:
          "short": float(shorts.quantile(0.98)) if len(shorts) else 0.5}
     _GATE[ckey] = g
     return g
+
+
+_CONFGATE: dict = {}
+
+
+def _conf_gate(model: str = "") -> float:
+    """The meta-model's fire threshold (best_q) for the selected model — the dotted line in
+    the confidence pane. Read from that model's config.json (follows the dropdown)."""
+    key = (model or "").strip()
+    if key in _CONFGATE:
+        return _CONFGATE[key]
+    name = registry.active_name() if (not model or model == "live") else model
+    val = 0.6
+    for p in (registry.model_dir(name) / "config.json", registry.ROOT / "config.json"):
+        try:
+            val = float(json.loads(p.read_text(encoding="utf-8"))["best_q"]); break
+        except Exception:                              # noqa: BLE001 — missing/blank -> default
+            continue
+    _CONFGATE[key] = val
+    return val
 
 
 # ───────────────────────── live engine + WebSocket ─────────────────────────
