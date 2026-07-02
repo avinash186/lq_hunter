@@ -13,6 +13,8 @@ from src import settings, topstep, execution, notify, broker_accounts, tradovate
 log = logging.getLogger(__name__)
 
 RISK_PRESETS = (100, 130, 150, 200)
+TV_MIN_PRESETS = (3000, 4000, 6000)       # Tradovate: account $ to unlock 2 contracts
+TV_INC_PRESETS = (2000, 4000, 6000)       # Tradovate: account $ per additional contract
 
 # Registered with Telegram (setMyCommands) -> shown in the / dropdown + menu button.
 # ONE unified list (the single poller handles all of these); /hub /fetch /stop are served
@@ -58,21 +60,26 @@ def _position_open() -> bool:
 def settings_summary() -> str:
     mode = "🟢 LIVE" if settings.execute_broker() else "🧪 DRY"
     halt = "yes" if execution.is_halted() else "no"
+    tv = (f"\nTV sizing: 2 contracts at ${settings.tv_min_for_2():,.0f}, +1 per ${settings.tv_increment():,.0f}"
+          if broker_accounts.accounts() else "")           # Tradovate-only; Topstep unaffected
     return (f"Mode: {mode}\n"
             f"Account: {settings.account_id() or '—'}\n"
             f"Model: {_model_name()}\n"
             f"Max risk: ${settings.max_risk():.0f}/trade\n"
-            f"Trading: MNQ\n"
+            f"Trading: MNQ{tv}\n"
             f"Halt: {halt}")
 
 
 # ── menu builders ──
 def _opt_rows() -> list:
-    return [[{"text": "💵 Max risk", "callback_data": "opt:risk"},
+    rows = [[{"text": "💵 Max risk", "callback_data": "opt:risk"},
              {"text": "🔀 Mode", "callback_data": "opt:mode"}],
             [{"text": "🧠 Model", "callback_data": "opt:model"},
-             {"text": "🏦 Account", "callback_data": "opt:acct"}],
-            [{"text": "✖️ Close", "callback_data": "opt:close"}]]
+             {"text": "🏦 Account", "callback_data": "opt:acct"}]]
+    if broker_accounts.accounts():           # Tradovate-only sub-menu; hidden when no TV accounts
+        rows.append([{"text": "📊 Tradovate sizing", "callback_data": "opt:tvsize"}])
+    rows.append([{"text": "✖️ Close", "callback_data": "opt:close"}])
+    return rows
 
 
 def _opt_menu(note: str = ""):
@@ -84,6 +91,26 @@ def _risk_menu():
     presets = [{"text": f"${v}", "callback_data": f"set:risk:{v}"} for v in RISK_PRESETS]
     rows = [presets[:2], presets[2:], [{"text": "✏️ Custom", "callback_data": "set:risk:custom"}], _NAV]
     return f"💵 Max risk (now ${settings.max_risk():.0f})", rows
+
+
+def _tvsize_menu(note: str = ""):
+    """TRADOVATE-ONLY contract sizing. Two knobs: the account $ that unlocks 2 contracts, and
+    the $ per additional contract. Topstep is never affected (it keeps execution.py sizing)."""
+    m2, inc = settings.tv_min_for_2(), settings.tv_increment()
+    head = (note + "\n\n") if note else ""
+    head += ("📊 Tradovate contract sizing\n"
+             "Applies to TRADOVATE ACCOUNTS ONLY — Topstep is unaffected.\n\n"
+             f"• 1 contract below ${m2:,.0f}\n"
+             f"• 2 contracts at ${m2:,.0f}, then +1 per ${inc:,.0f}\n"
+             "The stop-based auto-sizing still applies on top (tighter stop → more).")
+    minrow = [{"text": f"${v:,.0f}", "callback_data": f"set:tvmin:{v}"} for v in TV_MIN_PRESETS]
+    incrow = [{"text": f"${v:,.0f}", "callback_data": f"set:tvinc:{v}"} for v in TV_INC_PRESETS]
+    rows = [[{"text": f"— Min $ for 2 contracts (now ${m2:,.0f}) —", "callback_data": "opt:tvsize"}],
+            minrow, [{"text": "✏️ Custom min", "callback_data": "set:tvmin:custom"}],
+            [{"text": f"— $ per extra contract (now ${inc:,.0f}) —", "callback_data": "opt:tvsize"}],
+            incrow, [{"text": "✏️ Custom increment", "callback_data": "set:tvinc:custom"}],
+            _NAV]
+    return head, rows
 
 
 def _mode_menu():
@@ -367,6 +394,23 @@ def _route(data: str, chat):
         aid = data.split(":", 2)[2]
         settings.set("account_id", aid)
         return _opt_menu(f"✅ Account {aid}")
+    # ── Tradovate-only tiered sizing ──
+    if data == "opt:tvsize":
+        return _tvsize_menu()
+    if data.startswith("set:tvmin:"):
+        v = data.split(":", 2)[2]
+        if v == "custom":
+            _pending[str(chat)] = "tv_min"
+            return "Send the account $ that unlocks 2 contracts (e.g. 4000).", [[_BACK]]
+        settings.set("tv_min_for_2", float(v))
+        return _tvsize_menu(f"✅ Min for 2 contracts → ${float(v):,.0f}")
+    if data.startswith("set:tvinc:"):
+        v = data.split(":", 2)[2]
+        if v == "custom":
+            _pending[str(chat)] = "tv_inc"
+            return "Send the $ per additional contract (e.g. 2000).", [[_BACK]]
+        settings.set("tv_increment", float(v))
+        return _tvsize_menu(f"✅ Increment → ${float(v):,.0f}")
     # ── /acc routing ──
     if data in ("acc:refresh", "acc:noop"):
         return _acc_menu()
@@ -412,6 +456,10 @@ def on_text(text: str, chat) -> None:
     key = _pending.pop(str(chat), None)
     if key == "max_risk":
         _on_max_risk(text, chat)
+    elif key == "tv_min":
+        _on_tv_num("tv_min_for_2", text, chat, lo=1000, hi=1_000_000)
+    elif key == "tv_inc":
+        _on_tv_num("tv_increment", text, chat, lo=500, hi=1_000_000)
     elif key in ("add_creds", "add_acctid", "add_name"):
         _on_add_text(key, text, chat)
 
@@ -427,6 +475,21 @@ def _on_max_risk(text: str, chat) -> None:
         return
     settings.set("max_risk_per_trade", v)
     t, rows = _opt_menu(f"✅ Max risk ${v:.0f}")
+    notify.send_keyboard(chat, t, rows)
+
+
+def _on_tv_num(setting_key: str, text: str, chat, lo: float, hi: float) -> None:
+    """Custom-value handler for the two Tradovate sizing knobs (validated + echoed back)."""
+    try:
+        v = float(text.replace("$", "").replace(",", "").strip())
+    except ValueError:
+        notify.send_to(chat, "Not a number — tap /opt to try again.")
+        return
+    if not (lo <= v <= hi):
+        notify.send_to(chat, f"Out of range (${lo:,.0f}–${hi:,.0f}).")
+        return
+    settings.set(setting_key, v)
+    t, rows = _tvsize_menu(f"✅ set ${v:,.0f}")
     notify.send_keyboard(chat, t, rows)
 
 

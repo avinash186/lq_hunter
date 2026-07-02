@@ -42,10 +42,12 @@ def _reset_exec():
     tradovate_exec._state.clear()
     tradovate_exec._submitted.clear()
     tradovate_exec._contracts.clear()
+    tradovate_exec._equity.clear()
     tradovate_exec._halted = False
 
 
 def _settings(execute=True, risk=150.0):
+    settings._persist = lambda d: None               # never touch the real settings file on disk
     settings._data = {"max_risk_per_trade": risk, "execute_broker": execute, "account_id": "12345"}
 
 
@@ -358,7 +360,7 @@ def test_exec_realtime_close_frees_slot():
 
 # ── cross-broker fill/flat verification ──
 def _verify_setup():
-    _reset_accounts(); _settings(execute=True)
+    _reset_accounts(); _reset_exec(); _settings(execute=True)
     sent = []
     notify.send = lambda m, **k: sent.append(m) or True
     execution.resolve_contract = lambda s: "CON.MNQ"
@@ -367,23 +369,37 @@ def _verify_setup():
                                     {"name": "n", "password": "p", "appId": "a", "cid": "1", "sec": "s"})
     broker_accounts.add_account(lid, "99", "Micro-A")
     tradovate_exec._contracts[(lid, "NQ")] = {"id": 5, "name": "MNQM5"}
-    return sent
+    return sent, lid
 
 
 def test_verify_entry_confirms_and_flags_mismatch():
-    sent = _verify_setup()
+    sent, lid = _verify_setup()
+    tradovate_exec._equity[(lid, "99")] = 2000.0                    # tier 1 -> expects 1 contract
+    sig = {"contracts": 2, "sl_pts": 75.0}                          # Topstep expects 2; TV expects 1
     topstep.search_open_positions = lambda a: [{"contractId": "CON.MNQ", "size": 2}]
-    tradovate.search_open_positions = lambda lg, aid: [{"contractId": 5, "netPos": 2}]
-    broker_verify._verify_entry("NQ", {"contracts": 2}, 0)          # both filled
+    tradovate.search_open_positions = lambda lg, aid: [{"contractId": 5, "netPos": 1}]
+    broker_verify._verify_entry("NQ", sig, 0)                       # both filled, each at ITS expected size
     assert any("entry fills confirmed" in m for m in sent)
+    assert not any("size mismatch" in m for m in sent)             # per-account expected matched
     sent.clear()
     tradovate.search_open_positions = lambda lg, aid: []            # Tradovate did NOT fill
-    broker_verify._verify_entry("NQ", {"contracts": 2}, 0)
+    broker_verify._verify_entry("NQ", sig, 0)
     assert any("ENTRY FILL MISMATCH" in m for m in sent)
 
 
+def test_verify_entry_flags_per_account_size_mismatch():
+    """A Tradovate account that fills a DIFFERENT count than its own equity tier is flagged."""
+    sent, lid = _verify_setup()
+    tradovate_exec._equity[(lid, "99")] = 6000.0                    # tier 3 -> expects 3 (@75pt/$150)
+    sig = {"contracts": 1, "sl_pts": 75.0}
+    topstep.search_open_positions = lambda a: [{"contractId": "CON.MNQ", "size": 1}]
+    tradovate.search_open_positions = lambda lg, aid: [{"contractId": 5, "netPos": 2}]  # only 2, expected 3
+    broker_verify._verify_entry("NQ", sig, 0)
+    assert any("size mismatch" in m for m in sent)
+
+
 def test_verify_exit_all_flat_then_desync():
-    sent = _verify_setup()
+    sent, _lid = _verify_setup()
     topstep.search_open_positions = lambda a: []
     tradovate.search_open_positions = lambda lg, aid: []            # all flat
     broker_verify._verify_exit("NQ", 0)
@@ -392,6 +408,69 @@ def test_verify_exit_all_flat_then_desync():
     tradovate.search_open_positions = lambda lg, aid: [{"contractId": 5, "netPos": 2}]  # still open!
     broker_verify._verify_exit("NQ", 0)
     assert any("EXIT DESYNC" in m for m in sent) and any("/kill" in m for m in sent)
+
+
+# ── tiered contract sizing (Tradovate-only) ──
+def test_account_tier_steps():
+    t = tradovate_exec.account_tier
+    assert t(None, 4000, 2000) == 1                 # unknown equity -> safe floor
+    assert t(3999, 4000, 2000) == 1                 # below min_for_2
+    assert t(4000, 4000, 2000) == 2                 # exactly unlocks 2
+    assert t(5999, 4000, 2000) == 2
+    assert t(6000, 4000, 2000) == 3                 # +1 per increment
+    assert t(8000, 4000, 2000) == 4
+    assert t(10000, 6000, 4000) == 3                # custom knobs: 2 at 6k, +1 per 4k
+
+
+def test_contracts_for_scales_budget_and_autosizes():
+    _reset_accounts(); _reset_exec(); _settings(execute=True, risk=140.0)
+    # base_max_risk $140, MNQ $2 -> stop cap 70pt; equity $4000 -> tier 2 -> budget $280
+    tradovate_exec._equity[(LOGIN["id"], "99")] = 4000.0
+    f = lambda sl: tradovate_exec.contracts_for(LOGIN, ACCT, "NQ", sl)
+    assert f(70) == 2                               # tier minimum at the capped stop
+    assert f(40) == 3                               # tighter stop auto-sizes UP within the budget
+    assert f(35) == 4
+    # small account keeps today's behavior (tier 1)
+    tradovate_exec._equity[(LOGIN["id"], "99")] = 2000.0
+    assert tradovate_exec.contracts_for(LOGIN, ACCT, "NQ", 70) == 1
+
+
+def test_exec_sizes_each_account_by_its_equity():
+    _reset_accounts(); _reset_exec(); _settings(execute=True, risk=140.0); _silence()
+    placed = {}
+    tradovate.front_contract = lambda lg, s: {"id": 5, "name": "MNQM5"}
+    tradovate.search_open_positions = lambda lg, aid: []
+    def place(lg, ac, sym, side, contracts, *a, **k):
+        placed[ac["id"]] = contracts                # capture the per-account contract count
+        return {"orderId": 1}
+    tradovate.place_bracket_order = place
+    big, small = {"id": "B", "name": "Big", "enabled": True}, {"id": "S", "name": "Small", "enabled": True}
+    broker_accounts.enabled_targets = lambda: [(LOGIN, big), (LOGIN, small)]
+    tradovate_exec._equity[(LOGIN["id"], "B")] = 8000.0      # tier 4 @70pt/$140 -> 4 contracts
+    tradovate_exec._equity[(LOGIN["id"], "S")] = 2000.0      # tier 1 -> 1 contract
+    sig = dict(SIG, sl_pts=70.0)                             # stop at the $140/$2 cap (base bracket clips)
+    res = tradovate_exec.submit_all("NQ", sig)
+    assert placed["B"] == 4 and placed["S"] == 1
+    assert {r["acct"]: r["contracts"] for r in res} == {"Big": 4, "Small": 1}
+
+
+def test_tvsize_menu_routes_and_persists():
+    from src import tgcontrol as tg
+    _reset_accounts(); _settings(execute=True); _silence()
+    tg._pending.clear()
+    lid = broker_accounts.add_login("tradovate", "TV",
+                                    {"name": "n", "password": "p", "appId": "a", "cid": "1", "sec": "s"})
+    broker_accounts.add_account(lid, "99", "Micro-A")
+    # the sub-menu button appears only when Tradovate accounts exist
+    flat = [b["callback_data"] for row in tg._opt_rows() for b in row]
+    assert "opt:tvsize" in flat
+    tg._route("set:tvmin:6000", "1"); assert settings.tv_min_for_2() == 6000
+    tg._route("set:tvinc:4000", "1"); assert settings.tv_increment() == 4000
+    # custom-input flow for the increment
+    _, _ = tg._route("set:tvinc:custom", "1")
+    assert tg._pending.get("1") == "tv_inc"
+    tg.on_text("2500", "1")
+    assert settings.tv_increment() == 2500 and "1" not in tg._pending
 
 
 if __name__ == "__main__":

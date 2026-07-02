@@ -74,14 +74,21 @@ def _tradovate_size(lg, account_id, contract_id) -> int:
     return 0
 
 
-def _all_targets(symbol):
-    """[(label, size_fn)] for every active broker/account on this symbol."""
+def _all_targets(symbol, signal=None):
+    """[(label, size_fn, expected)] for every active broker/account on this symbol.
+
+    `expected` is the contract count that account SHOULD show once filled — per account, since
+    Tradovate accounts size by their own equity tier while Topstep keeps the base count. It is
+    None when `signal` is omitted (the exit path only needs flat/not-flat, not the size)."""
     out = []
     ts = _topstep_target(symbol)
     if ts:
-        out.append((ts[0], lambda a=ts: _topstep_size(a[1], a[2])))
+        exp = int(signal["contracts"]) if signal else None
+        out.append((ts[0], lambda a=ts: _topstep_size(a[1], a[2]), exp))
     for name, lg, ac, cid in _tradovate_targets(symbol):
-        out.append((f"Tradovate {name}", lambda lg=lg, ac=ac, cid=cid: _tradovate_size(lg, ac["id"], cid)))
+        exp = tradovate_exec.contracts_for(lg, ac, symbol, signal["sl_pts"]) if signal else None
+        out.append((f"Tradovate {name}",
+                    lambda lg=lg, ac=ac, cid=cid: _tradovate_size(lg, ac["id"], cid), exp))
     return out
 
 
@@ -90,7 +97,7 @@ def _wait_for_anchor(targets, ready, cap):
     or the anchor cap elapses. Returns the anchor time, or None if none confirmed in time."""
     t0 = time.time()
     while True:
-        sizes = [(l, fn()) for l, fn in targets]
+        sizes = [(l, fn()) for l, fn, _exp in targets]
         if ready(sizes):
             return time.time()
         if time.time() - t0 >= cap:
@@ -99,7 +106,7 @@ def _wait_for_anchor(targets, ready, cap):
 
 
 def _sizes(targets):
-    return [(l, fn()) for l, fn in targets]
+    return [(l, fn()) for l, fn, _exp in targets]
 
 
 # ── entry: confirm consistent fills ──
@@ -111,10 +118,10 @@ def verify_entry(symbol: str, signal: dict) -> None:
 
 
 def _verify_entry(symbol, signal, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP):
-    targets = _all_targets(symbol)
+    targets = _all_targets(symbol, signal)
     if not targets:
         return
-    want = int(signal.get("contracts") or 0)
+    want = {l: exp for l, _fn, exp in targets}         # per-account expected size (Topstep vs each TV tier)
     # phase 1: wait for the FIRST broker to fill -> anchor the clock
     anchor = _wait_for_anchor(targets, lambda sz: any(s for _, s in sz), cap)
     if anchor is None:
@@ -127,13 +134,15 @@ def _verify_entry(symbol, signal, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP
         time.sleep(poll)
     filled = [(l, s) for l, s in sizes if s]
     missing = [(l, s) for l, s in sizes if not s]
-    lines = [f"✅ {l} filled {s}x" for l, s in filled] + [f"⚠️ {l} NOT filled" for l, _ in missing]
+    lines = ([f"✅ {l} filled {s}x" + (f" (expected {want[l]})" if want.get(l) and s != want[l] else "")
+              for l, s in filled]
+             + [f"⚠️ {l} NOT filled" for l, _ in missing])
     if missing:                                        # still inconsistent AFTER the leeway
         notify.send("🚨 ENTRY FILL MISMATCH — some brokers filled, some did NOT (after leeway):\n"
                     + "\n".join(lines) + "\nReview positions; consider /kill.")
         log.warning("broker_verify: entry mismatch %s filled=%s missing=%s", symbol, filled, missing)
     else:                                              # all filled — per-account confirmation
-        odd = [l for l, s in filled if want and s != want]
+        odd = [l for l, s in filled if want.get(l) and s != want[l]]
         note = ("\n⚠️ size mismatch on: " + ", ".join(odd)) if odd else ""
         notify.send(f"📥 {symbol} entry fills confirmed:\n" + "\n".join(lines) + note)
 

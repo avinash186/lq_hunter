@@ -28,6 +28,7 @@ _lock = threading.RLock()
 _state: dict[tuple, dict] = {}         # (login_id, acct_id, symbol) -> {status, tag, contract, open_ts}
 _submitted: set[tuple] = set()         # (acct_id, tag) idempotency
 _contracts: dict[tuple, dict] = {}     # (login_id, symbol) -> contract dict {id,name}
+_equity: dict[tuple, float] = {}       # (login_id, acct_id) -> cached net-liq (for tiered sizing)
 _halted = False
 _pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tv-exec")
 
@@ -89,6 +90,46 @@ def _broker_has_position(login, acct, contract_id) -> bool:
     return False
 
 
+# ── tiered contract sizing (TRADOVATE ONLY — Topstep uses its own execution.py path) ──
+def account_tier(equity, min_for_2: float, increment: float) -> int:
+    """Minimum contracts for a Tradovate account by equity: 1 below `min_for_2`, 2 at it,
+    then +1 per `increment` above. (Topstep is unaffected — it never calls this.)"""
+    if equity is None or equity < min_for_2:
+        return 1
+    return 2 + int((float(equity) - min_for_2) // max(float(increment), 1.0))
+
+
+def _cached_equity(login, acct):
+    return _equity.get((login["id"], str(acct["id"])))
+
+
+def contracts_for(login, acct, symbol: str, sl_pts: float) -> int:
+    """Per-account contract count for a Tradovate order. The account's equity TIER scales the
+    risk budget (tier x base max_risk); the existing stop-based auto-sizing then still applies
+    on top (tighter stop -> more contracts). The stop itself is UNCHANGED — its width/cap comes
+    from the base bracket (base max_risk), so this only ever raises the contract count, never
+    widens the stop. Falls back to tier 1 (today's behavior) when equity isn't cached yet."""
+    pv = float(config.EXEC_POINT_VALUE.get(symbol.upper(), 2.0))
+    base = float(settings.max_risk())
+    tier = account_tier(_cached_equity(login, acct), settings.tv_min_for_2(), settings.tv_increment())
+    budget = tier * base
+    return max(1, int(budget / (max(float(sl_pts), 1e-9) * pv)))     # floor, >= 1
+
+
+def refresh_equity() -> None:
+    """Cache each configured Tradovate account's net-liq so sizing is latency-free on a fire.
+    Called from warm_tokens (per-minute) and reconcile_startup. Never raises into the caller."""
+    for lg, ac in broker_accounts.accounts():
+        if not tradovate.configured(lg):
+            continue
+        try:
+            b = tradovate.cash_balance(lg, ac["id"])
+            if b is not None:
+                _equity[(lg["id"], str(ac["id"]))] = float(b)
+        except Exception:                              # noqa: BLE001
+            log.exception("tradovate_exec: equity refresh failed %s/%s", lg["id"], ac.get("id"))
+
+
 # ── per-account submit (mirrors execution.submit) ──
 def submit_one(login: dict, acct: dict, symbol: str, signal: dict) -> dict:
     symbol = symbol.upper()
@@ -99,11 +140,11 @@ def submit_one(login: dict, acct: dict, symbol: str, signal: dict) -> dict:
             return {"acct": name, "action": "skip", "reason": "halted"}
         if (str(acct["id"]), tag) in _submitted:
             return {"acct": name, "action": "skip", "reason": "duplicate_tag"}
-    contracts = int(signal["contracts"])
+    contracts = contracts_for(login, acct, symbol, signal["sl_pts"])   # per-account tiered size
     if not settings.execute_broker():                  # DRY — never send
         with _lock:
             _submitted.add((str(acct["id"]), tag))
-        return {"acct": name, "action": "dry_run", "tag": tag}
+        return {"acct": name, "action": "dry_run", "tag": tag, "contracts": contracts}
     c = _contract(login, symbol)
     if c is None:
         notify.send(f"⚠️ Tradovate {name}: contract resolve failed for {symbol} — no order.")
@@ -136,14 +177,14 @@ def submit_one(login: dict, acct: dict, symbol: str, signal: dict) -> dict:
         with _lock:
             _st(login, acct, symbol).update(status=OPEN, order_id=oid, open_ts=time.time())
         log.info("tradovate_exec: placed %s %sx %s tag=%s order=%s", name, contracts, symbol, tag, oid)
-        return {"acct": name, "action": "placed", "order_id": oid, "tag": tag}
+        return {"acct": name, "action": "placed", "order_id": oid, "tag": tag, "contracts": contracts}
     except Exception as e:                              # noqa: BLE001 — timeout/network
         landed = _broker_has_position(login, acct, c["id"])
         if landed:
             with _lock:
                 _submitted.add((str(acct["id"]), tag))
                 _st(login, acct, symbol).update(status=OPEN, open_ts=time.time())
-            return {"acct": name, "action": "adopted_after_error", "tag": tag}
+            return {"acct": name, "action": "adopted_after_error", "tag": tag, "contracts": contracts}
         with _lock:
             _st(login, acct, symbol)["status"] = FLAT
         log.exception("tradovate_exec: submit failed %s, no order", name)
@@ -168,7 +209,8 @@ def submit_all(symbol: str, signal: dict) -> list[dict]:
     placed = [r for r in results if r.get("action") in ("placed", "adopted_after_error")]
     if placed and settings.execute_broker():
         d = "LONG" if signal["side"] == 1 else "SHORT"
-        notify.send(f"✅ Tradovate: {symbol} {d} placed on {len(placed)}/{len(results)} account(s).")
+        per_acct = ", ".join(f"{r.get('acct')} {r.get('contracts', '?')}x" for r in placed)
+        notify.send(f"✅ Tradovate: {symbol} {d} placed on {len(placed)}/{len(results)} account(s) — {per_acct}")
     return results
 
 
@@ -203,6 +245,7 @@ def reconcile_startup() -> None:
     """Adopt any existing broker positions on boot so a restart never double-submits."""
     if not settings.execute_broker():
         return
+    refresh_equity()                                   # warm sizing cache before the first fire
     for lg, ac in broker_accounts.enabled_targets():
         for sym in config.TRADE_SYMBOLS:
             c = _contract(lg, sym)
@@ -233,9 +276,11 @@ def flatten_all_accounts() -> dict:
 
 
 def warm_tokens() -> None:
-    """Keep every configured login's token warm (called periodically for low latency)."""
+    """Keep every configured login's token warm (called periodically for low latency).
+    Also refreshes cached account equity so the tiered sizing is latency-free on a fire."""
     for lg, _ in broker_accounts.accounts():
         tradovate.validate_token(lg)
+    refresh_equity()
 
 
 # ── real-time (WebSocket) event handlers — the safety-net polling reconcile still runs ──

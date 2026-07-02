@@ -27,7 +27,9 @@ _lock = threading.RLock()
 _data: dict | None = None
 
 # Keys + their first-creation seeds. execute_broker seeds DRY.
-_KEYS = ("max_risk_per_trade", "execute_broker", "account_id")
+# tv_min_for_2 / tv_increment drive the TRADOVATE-ONLY tiered contract sizing (Topstep
+# is unaffected): 1 contract below tv_min_for_2, 2 at it, then +1 per tv_increment of equity.
+_KEYS = ("max_risk_per_trade", "execute_broker", "account_id", "tv_min_for_2", "tv_increment")
 
 
 def _seed() -> dict:
@@ -35,6 +37,8 @@ def _seed() -> dict:
         "max_risk_per_trade": float(config.MAX_RISK_PER_TRADE),
         "execute_broker": False,                       # DRY on first creation
         "account_id": config.TOPSTEP_ACCOUNT_ID,
+        "tv_min_for_2": 4000.0,                        # Tradovate: account $ to trade 2 contracts
+        "tv_increment": 2000.0,                        # Tradovate: account $ per additional contract
     }
 
 
@@ -99,3 +103,13 @@ def execute_broker() -> bool:
 
 def account_id():
     return get("account_id", config.TOPSTEP_ACCOUNT_ID)
+
+
+def tv_min_for_2() -> float:
+    """Tradovate-only: account equity ($) that unlocks 2 contracts."""
+    return float(get("tv_min_for_2", 4000.0))
+
+
+def tv_increment() -> float:
+    """Tradovate-only: account equity ($) per additional contract above tv_min_for_2."""
+    return float(get("tv_increment", 2000.0))
