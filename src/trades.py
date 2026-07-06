@@ -22,6 +22,7 @@ Store: data/trades/trades_{sym}_{variant}.parquet (precomputed) + live append.
 from __future__ import annotations
 
 import math
+import threading
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ from src import data_loader, signals, metrics
 from src.features import technical, brackets
 
 TR_DIR = config.DATA_DIR / "trades"
+_APPEND_LOCK = threading.Lock()              # live trade file written by active + shadow scorers
 ATR_FLOOR, TP_CAP = 1.0, 4.0      # ATR multiples for the level distances
 ATR_K = 1.5                       # base-model symmetric barrier
 COST_TICKS = 2.0
@@ -75,9 +77,14 @@ def append(symbol, rec, variant="lq", model=None):
     p = path_live(symbol, variant)
     rec = dict(rec); rec["model"] = model or registry.active_name()
     new = pd.DataFrame([rec]).astype(_LIVE_COLS)
-    old = load_live(symbol, variant)
-    out = pd.concat([old[old["entry_ts"] != rec["entry_ts"]], new], ignore_index=True) if not old.empty else new
-    out.sort_values("entry_ts").to_parquet(p, index=False)
+    with _APPEND_LOCK:                        # serialize active + per-model shadow writers
+        old = load_live(symbol, variant)
+        if old.empty:
+            out = new
+        else:
+            dup = (old["entry_ts"] == rec["entry_ts"]) & (old["model"] == rec["model"])
+            out = pd.concat([old[~dup], new], ignore_index=True)   # one trade per (entry_ts, model)
+        out.sort_values("entry_ts").to_parquet(p, index=False)
 
 
 def bracket_and_size(symbol, entry, atr, above, below, side, variant="lq", max_risk=None):

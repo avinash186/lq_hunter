@@ -116,7 +116,7 @@ def score(feat: pd.DataFrame, risk: np.ndarray, symbol_id: np.ndarray,
     return out
 
 
-def live_score(symbol: str, df: pd.DataFrame, partner_pos: float = 0.0) -> dict:
+def live_score(symbol: str, df: pd.DataFrame, partner_pos: float = 0.0, model_dir=None) -> dict:
     """Score the LATEST bar of a rolling-window frame ``df`` (naive-ET 1m OHLCV).
     Builds base features over the window, scores the last row. ~150ms for ~120d.
     Returns p_up/p_conf/side/fire plus pos_in_bracket (to feed the partner symbol)."""
@@ -144,7 +144,7 @@ def live_score(symbol: str, df: pd.DataFrame, partner_pos: float = 0.0) -> dict:
     # pass the RUNTIME risk so the fire gate tracks the live sizing (/opt changes obey)
     from src import settings
     levels = (np.array([above]), np.array([below]), np.array([entry]), np.array([atr_f]))
-    sc = score(feat, risk, np.array([sid]), levels=levels, max_risk=settings.max_risk())
+    sc = score(feat, risk, np.array([sid]), model_dir=model_dir, levels=levels, max_risk=settings.max_risk())
     pos = geo["pos_in_bracket"].iloc[-1]
     return {"p_up": float(sc["p_up"].iloc[0]), "p_conf": float(sc["p_conf"].iloc[0]),
             "side": int(sc["side"].iloc[0]), "fire": bool(sc["fire"].iloc[0]),

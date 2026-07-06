@@ -210,7 +210,28 @@
       </div></div>
       <div class="lab-tabs">
         <button class="lab-tab active" data-lab="models" onclick="lab.tab(this)">Models</button>
+        <button class="lab-tab" data-lab="metrics" onclick="lab.tab(this)">Metrics</button>
         <button class="lab-tab" data-lab="labeling" onclick="lab.tab(this)">Labeling</button>
+      </div>
+      <div class="lab-pane" id="lab-metrics">
+        <div class="lab-metric-controls" style="display:flex;gap:16px;align-items:center;margin:0 0 12px 2px;flex-wrap:wrap">
+          <label style="display:flex;gap:6px;align-items:center">Window
+            <select id="metrics-timeframe" class="cx-model-sel">
+              <option value="">All-time</option><option value="7d">Last 7d</option>
+              <option value="30d">Last 30d</option><option value="90d">Last 90d</option><option value="1y">Last 1y</option>
+            </select></label>
+          <label style="display:flex;gap:6px;align-items:center">Show
+            <select id="metrics-scope" class="cx-model-sel">
+              <option value="all">Live + shadow &amp; historical</option>
+              <option value="live">Live + shadow only</option>
+              <option value="historical">Historical only</option>
+            </select></label>
+          <span class="ph-sub" style="margin-left:auto">Fwd = live + shadow (paper) forward trades · OOS = walk-forward backtest · updates on each trade close</span>
+        </div>
+        <div class="card"><div class="tbl-wrap"><table class="dt">
+          <thead><tr><th>Model</th><th>Status</th><th>Fwd trades</th><th>Fwd win%</th><th>Fwd PF</th><th>Fwd $</th><th>OOS trades</th><th>OOS win%</th><th>OOS PF</th><th>OOS Sharpe</th><th>OOS $</th></tr></thead>
+          <tbody id="lab-metrics-body"><tr><td colspan="11" class="empty">Loading…</td></tr></tbody>
+        </table></div></div>
       </div>
       <div class="lab-pane active" id="lab-models">
         <div class="card"><div class="tbl-wrap"><table class="dt">

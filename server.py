@@ -10,6 +10,7 @@ import asyncio
 import datetime as _datetime
 import json
 import logging
+import math
 import zoneinfo as _zoneinfo
 
 import pandas as pd
@@ -333,6 +334,18 @@ def _model_stats(name: str) -> dict:
     return res
 
 
+def _finite(o):
+    """Replace inf/NaN floats with None so JSONResponse (allow_nan=False) can serialize —
+    e.g. profit_factor is inf when a (fresh) model has zero losing trades."""
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: _finite(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_finite(v) for v in o]
+    return o
+
+
 @app.get("/api/models")
 def models_list():
     """Registry models for the Lab Models page. Each: manifest fields + active flag +
@@ -357,8 +370,8 @@ def models_list():
         except Exception:
             pass
         out.append(m)
-    return JSONResponse({"models": out, "active": registry.active_name(),
-                         "trial_n": registry.trial_n()})
+    return JSONResponse(_finite({"models": out, "active": registry.active_name(),
+                                 "trial_n": registry.trial_n()}))
 
 
 @app.post("/api/models/{name}/activate")
@@ -368,6 +381,88 @@ def models_activate(name: str):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse({"active": registry.active_name()})
+
+
+_TF = {"7d": 7*86400, "30d": 30*86400, "90d": 90*86400, "1y": 365*86400}
+
+
+def _base_is(name, sym="NQ"):
+    """A model's IN-SAMPLE backtest trades WITHOUT the live merge (the 'historical' curve)."""
+    if name in (registry.PROD, "production", "", "live"):
+        return trades.load(sym, "lq", oos=False)
+    p = registry.model_dir(name) / f"trades_{sym.lower()}.parquet"
+    return pd.read_parquet(p) if p.exists() else pd.DataFrame()
+
+
+def _base_oos(name, sym="NQ"):
+    if name in (registry.PROD, "production", "", "live"):
+        return trades.load(sym, "lq", oos=True)
+    p = registry.model_dir(name) / f"oos_trades_{sym.lower()}.parquet"
+    return pd.read_parquet(p) if p.exists() else pd.DataFrame()
+
+
+def _fwd(name, sym="NQ"):
+    """Forward (live real + shadow paper) trades tagged to this model — its true out-of-sample record."""
+    from src import shadow
+    parts = []
+    try:
+        lv = trades.load_live(sym)
+        if len(lv) and "model" in lv.columns:
+            parts.append(lv[lv["model"] == name])
+    except Exception:                                  # noqa: BLE001
+        pass
+    try:
+        sh = shadow.load_shadow(name)
+        if len(sh):
+            parts.append(sh)
+    except Exception:                                  # noqa: BLE001
+        pass
+    parts = [p for p in parts if p is not None and len(p)]
+    if not parts:
+        return pd.DataFrame()
+    return pd.concat(parts, ignore_index=True).drop_duplicates("entry_ts")
+
+
+@app.get("/api/models/metrics")
+def models_metrics(timeframe: str = "", scope: str = "all"):
+    """Per-model metrics over a selectable window + scope for the Metrics sub-tab.
+    scope: 'historical' (backtest IS/OOS), 'live' (live+shadow forward), 'all' (both).
+    timeframe: '' all-time, else '7d'/'30d'/'90d'/'1y'. Recomputes on request so the table
+    reflects live/shadow trades as they close."""
+    import time as _t
+    from src import metrics
+    span = _TF.get(timeframe)
+    frm = (int(_t.time()) - span) if span else None
+
+    def block(df):
+        if df is None or len(df) == 0:
+            return {"trades": 0}
+        if frm is not None:
+            df = df[df["entry_ts"] >= frm]
+        if len(df) == 0:
+            return {"trades": 0}
+        r = df["R"].to_numpy(float)
+        fin = metrics.financial(r, df["entry_ts"].to_numpy())
+        return {"trades": int(fin["trades"]), "win": fin.get("win_rate"),
+                "pf": fin.get("profit_factor"), "sharpe": fin.get("sharpe_annual"),
+                "maxdd_R": fin.get("max_drawdown_R"), "total_usd": float(df["pnl_usd"].sum())}
+
+    active = registry.active_name()
+    out = []
+    for m in registry.list_models():
+        name = m["name"]
+        row = {"name": name, "status": m.get("status"), "parent": m.get("parent"),
+               "live": name == active}
+        try:
+            if scope in ("historical", "all"):
+                row["is"] = block(_base_is(name))
+                row["oos"] = block(_base_oos(name))
+            if scope in ("live", "all"):
+                row["fwd"] = block(_fwd(name))
+        except Exception:                              # noqa: BLE001 — never fail the whole table
+            log.exception("models_metrics: %s failed", name)
+        out.append(row)
+    return JSONResponse(_finite({"models": out, "active": active, "scope": scope, "timeframe": timeframe}))
 
 
 @app.get("/api/lab/workspaces")

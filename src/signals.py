@@ -12,6 +12,7 @@ prob) · side (int8 1=long/0=short) · fire (bool meta-gate cleared).
 from __future__ import annotations
 
 import os
+import threading
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ import config
 from src import dataset, score
 
 SIG_DIR = config.DATA_DIR / "signals"
+_APPEND_LOCK = threading.Lock()              # live file is written by the active + shadow scorers
 _COLS = {"ts": "int64", "p_up": "float32", "p_conf": "float32",
          "side": "int8", "fire": "bool"}
 _LIVE_COLS = {**_COLS, "model": "object"}    # live rows are tagged with the model that fired them
@@ -212,9 +214,15 @@ def append(symbol: str, row: dict, model: str | None = None):
     p = path_live(symbol)
     row = dict(row); row["model"] = model or registry.active_name()
     new = pd.DataFrame([row]).astype(_LIVE_COLS)
-    old = load_live(symbol)
-    out = pd.concat([old[old["ts"] != row["ts"]], new], ignore_index=True) if not old.empty else new
-    out.sort_values("ts").to_parquet(p, index=False)
+    with _APPEND_LOCK:                        # serialize active + per-model shadow writers
+        old = load_live(symbol)
+        # dedup on (ts, model): the SAME bar can carry one row PER model (active + shadows)
+        if old.empty:
+            out = new
+        else:
+            dup = (old["ts"] == row["ts"]) & (old["model"] == row["model"])
+            out = pd.concat([old[~dup], new], ignore_index=True)
+        out.sort_values("ts").to_parquet(p, index=False)
 
 
 if __name__ == "__main__":

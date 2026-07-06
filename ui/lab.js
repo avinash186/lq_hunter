@@ -34,6 +34,24 @@
       '<td>' + act + '</td></tr>';
   }
 
+  // ── Metrics sub-tab: per-model forward (live+shadow) + backtest-OOS, over a chosen window ──
+  function usd(v) { return v == null || v !== v ? '—' : '$' + Math.round(v).toLocaleString(); }
+  function metricsRow(m) {
+    var fwd = m.fwd || {}, oos = m.oos || {}, is = m.is || {};
+    return '<tr' + (m.live ? ' class="lab-active-row"' : '') + '>' +
+      '<td><strong>' + m.name + '</strong>' + (m.live ? ' <span class="lab-badge">LIVE</span>' : '') + '</td>' +
+      '<td>' + (m.status || '—') + '</td>' +
+      '<td>' + (fwd.trades || 0) + '</td>' +
+      '<td>' + pct(fwd.win) + '</td>' +
+      '<td>' + f2(fwd.pf) + '</td>' +
+      '<td>' + usd(fwd.total_usd) + '</td>' +
+      '<td>' + (oos.trades || is.trades || 0) + '</td>' +
+      '<td>' + pct(oos.win != null ? oos.win : is.win) + '</td>' +
+      '<td>' + f2(oos.pf != null ? oos.pf : is.pf) + '</td>' +
+      '<td>' + f2(oos.sharpe != null ? oos.sharpe : is.sharpe) + '</td>' +
+      '<td>' + usd(oos.total_usd != null ? oos.total_usd : is.total_usd) + '</td></tr>';
+  }
+
   var lab = {
     open: function () { lab.loadModels(); },
     tab: function (b) {
@@ -43,6 +61,20 @@
       document.querySelectorAll('.lab-pane').forEach(function (x) { x.classList.remove('active'); });
       el('lab-' + p).classList.add('active');
       if (p === 'labeling' && window.labchart) window.labchart.show();
+      if (p === 'metrics') lab.loadMetrics();
+    },
+    loadMetrics: function () {
+      var body = el('lab-metrics-body'); if (!body) return;
+      var tf = (el('metrics-timeframe') || {}).value || '';
+      var scope = (el('metrics-scope') || {}).value || 'all';
+      fetch('/api/models/metrics?timeframe=' + encodeURIComponent(tf) + '&scope=' + encodeURIComponent(scope))
+        .then(function (r) { return r.json(); }).then(function (d) {
+          var ms = (d && d.models) || [];
+          body.innerHTML = ms.length ? ms.map(metricsRow).join('')
+            : '<tr><td colspan="11" class="empty">No models.</td></tr>';
+        }).catch(function () {
+          body.innerHTML = '<tr><td colspan="11" class="empty">Failed to load metrics.</td></tr>';
+        });
     },
     loadModels: function () {
       var body = el('lab-models-body'); if (!body) return;
@@ -65,4 +97,21 @@
     },
   };
   window.lab = lab;
+
+  // Controls: re-query metrics when the window/scope changes.
+  document.addEventListener('change', function (e) {
+    if (e.target && (e.target.id === 'metrics-timeframe' || e.target.id === 'metrics-scope')) lab.loadMetrics();
+  });
+  // Live refresh: when ANY model (live or shadow) closes a trade, refresh the metrics table if visible.
+  (function () {
+    try {
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      var ws = new WebSocket(proto + '//' + location.host + '/ws');
+      ws.onmessage = function (msg) {
+        var ev; try { ev = JSON.parse(msg.data); } catch (x) { return; }
+        if ((ev.e === 'trade_close' || ev.e === 'shadow_close') &&
+            el('lab-metrics') && el('lab-metrics').classList.contains('active')) lab.loadMetrics();
+      };
+    } catch (x) {}
+  })();
 })();
