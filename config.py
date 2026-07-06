@@ -75,6 +75,15 @@ WEEKLY_RETRAIN = os.getenv("WEEKLY_RETRAIN", "0").strip().lower() not in ("0", "
 # Let a challenger that beats the live model on >=100 shadow trades (promotion gate)
 # AUTO-promote — repointing the live model with no manual step. OFF by default.
 AUTO_PROMOTE = os.getenv("AUTO_PROMOTE", "0").strip().lower() not in ("0", "false", "no", "")
+# Per-bar SHADOW scoring: after the active model scores each bar, score every OTHER registered
+# model and run a PAPER trade engine (no broker orders) so the UI shows all models trading live.
+# Runs on a background daemon thread OFF the hot path. OFF by default.
+SHADOW_SCORE = os.getenv("SHADOW_SCORE", "0").strip().lower() not in ("0", "false", "no", "")
+# TP-desync failsafe: when the algo exits at TP (or the 16:10 eod flat) but brokers still hold
+# the position after the verify leeway, AUTO-FLATTEN the stragglers at market (cancel brackets
+# + liquidate). Escalates to a full kill (+ auto-resume only after confirmed flat) if the
+# targeted flatten can't confirm. SL-side desyncs stay alert-only. OFF by default.
+AUTO_FLATTEN_TP = os.getenv("AUTO_FLATTEN_TP", "0").strip().lower() not in ("0", "false", "no", "")
 
 # ── Broker execution (Topstep / ProjectX) ──
 # OFF by default: when off, a fired signal is DRY-RUN (the exact OCO bracket payload is

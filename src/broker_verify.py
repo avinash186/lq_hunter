@@ -19,6 +19,7 @@ import logging
 import threading
 import time
 
+import config
 from src import topstep, tradovate, tradovate_exec, broker_accounts, notify, settings, execution
 
 log = logging.getLogger(__name__)
@@ -74,21 +75,46 @@ def _tradovate_size(lg, account_id, contract_id) -> int:
     return 0
 
 
+def _topstep_flatten(account_id, contract_id):
+    """Targeted close on Topstep: cancel THIS contract's working orders + market-close it."""
+    for o in topstep.search_open_orders(account_id):
+        if o.get("contractId") in (None, contract_id):
+            try:
+                topstep.cancel_order(account_id, o.get("id") or o.get("orderId"))
+            except Exception:                          # noqa: BLE001
+                log.exception("broker_verify: topstep cancel failed")
+    topstep.close_position(account_id, contract_id)
+
+
+def _tradovate_flatten(lg, account_id, contract_id):
+    """Targeted close on a Tradovate account: cancel THIS contract's orders + liquidate."""
+    for o in tradovate.search_open_orders(lg, account_id):
+        if o.get("contractId") in (None, int(contract_id)):
+            try:
+                tradovate.cancel_order(lg, o.get("id") or o.get("orderId"))
+            except Exception:                          # noqa: BLE001
+                log.exception("broker_verify: tradovate cancel failed")
+    tradovate.liquidate_position(lg, account_id, contract_id)
+
+
 def _all_targets(symbol, signal=None):
-    """[(label, size_fn, expected)] for every active broker/account on this symbol.
+    """[(label, size_fn, expected, flatten_fn)] for every active broker/account on this symbol.
 
     `expected` is the contract count that account SHOULD show once filled — per account, since
     Tradovate accounts size by their own equity tier while Topstep keeps the base count. It is
-    None when `signal` is omitted (the exit path only needs flat/not-flat, not the size)."""
+    None when `signal` is omitted (the exit path only needs flat/not-flat, not the size).
+    `flatten_fn` is the targeted kill for THIS account+contract (auto-flatten failsafe)."""
     out = []
     ts = _topstep_target(symbol)
     if ts:
         exp = int(signal["contracts"]) if signal else None
-        out.append((ts[0], lambda a=ts: _topstep_size(a[1], a[2]), exp))
+        out.append((ts[0], lambda a=ts: _topstep_size(a[1], a[2]), exp,
+                    lambda a=ts: _topstep_flatten(a[1], a[2])))
     for name, lg, ac, cid in _tradovate_targets(symbol):
         exp = tradovate_exec.contracts_for(lg, ac, symbol, signal["sl_pts"]) if signal else None
         out.append((f"Tradovate {name}",
-                    lambda lg=lg, ac=ac, cid=cid: _tradovate_size(lg, ac["id"], cid), exp))
+                    lambda lg=lg, ac=ac, cid=cid: _tradovate_size(lg, ac["id"], cid), exp,
+                    lambda lg=lg, ac=ac, cid=cid: _tradovate_flatten(lg, ac["id"], cid)))
     return out
 
 
@@ -97,7 +123,7 @@ def _wait_for_anchor(targets, ready, cap):
     or the anchor cap elapses. Returns the anchor time, or None if none confirmed in time."""
     t0 = time.time()
     while True:
-        sizes = [(l, fn()) for l, fn, _exp in targets]
+        sizes = [(l, fn()) for l, fn, _exp, _fl in targets]
         if ready(sizes):
             return time.time()
         if time.time() - t0 >= cap:
@@ -106,7 +132,7 @@ def _wait_for_anchor(targets, ready, cap):
 
 
 def _sizes(targets):
-    return [(l, fn()) for l, fn, _exp in targets]
+    return [(l, fn()) for l, fn, _exp, _fl in targets]
 
 
 # ── entry: confirm consistent fills ──
@@ -121,7 +147,7 @@ def _verify_entry(symbol, signal, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP
     targets = _all_targets(symbol, signal)
     if not targets:
         return
-    want = {l: exp for l, _fn, exp in targets}         # per-account expected size (Topstep vs each TV tier)
+    want = {l: exp for l, _fn, exp, _fl in targets}    # per-account expected size (Topstep vs each TV tier)
     # phase 1: wait for the FIRST broker to fill -> anchor the clock
     anchor = _wait_for_anchor(targets, lambda sz: any(s for _, s in sz), cap)
     if anchor is None:
@@ -148,18 +174,46 @@ def _verify_entry(symbol, signal, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP
 
 
 # ── exit: confirm every broker is flat ──
-def verify_exit(symbol: str) -> None:
+def verify_exit(symbol: str, outcome: str | None = None, reentered=None) -> None:
+    """``outcome`` = the algo's exit reason (tp/sl/eod). With AUTO_FLATTEN_TP on, a tp/eod exit
+    where brokers still hold after the leeway is AUTO-FLATTENED (targeted; escalates to a full
+    kill + auto-resume-on-confirmed-flat). SL exits keep the alert-only behavior — stop orders
+    trigger on touch, so an SL desync signals something a human should look at."""
     if not settings.execute_broker():
         return
-    threading.Thread(target=_verify_exit, args=(symbol,), name="verify-exit", daemon=True).start()
+    threading.Thread(target=_verify_exit, args=(symbol,),
+                     kwargs={"outcome": outcome, "reentered": reentered},
+                     name="verify-exit", daemon=True).start()
 
 
-def _verify_exit(symbol, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP):
+def _verify_exit(symbol, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP,
+                 outcome=None, reentered=None):
     targets = _all_targets(symbol)
     if not targets:
         return
+    auto = config.AUTO_FLATTEN_TP and outcome in ("tp", "eod")
+    if auto:
+        # THE ALGO'S OWN EXIT IS THE ANCHOR: brokers get `leeway` seconds to go flat; whoever
+        # still holds after that gets flattened at market (covers BOTH the some-flat and the
+        # none-flat case — a booked TP with any broker still in is never left unmanaged).
+        t0 = time.time()
+        while True:
+            still = [l for l, s in _sizes(targets) if s]
+            if not still or time.time() - t0 >= leeway:
+                break
+            time.sleep(poll)
+        if not still:
+            notify.send(f"🏁 {symbol} — all brokers confirmed flat.")
+            return
+        if reentered is not None and reentered():      # a NEW trade opened -> can't tell old/new apart
+            notify.send(f"⚠️ {symbol} TP desync detected but a NEW trade is already open — "
+                        f"auto-flatten ABORTED to protect it. Review positions; /kill if needed.")
+            log.warning("broker_verify: auto-flatten aborted (re-entered) %s still=%s", symbol, still)
+            return
+        _auto_flatten(symbol, targets, still, outcome)
+        return
+    # ── legacy path (SL exits / failsafe off): anchor on the first broker, alert only ──
     n = len(targets)
-    # phase 1: wait for the FIRST broker to go flat -> anchor the clock
     anchor = _wait_for_anchor(targets, lambda sz: sum(1 for _, s in sz if s) < n, cap)
     if anchor is None:                                 # none flattened -> all still holding = CONSISTENT
         still = [l for l, s in _sizes(targets) if s]
@@ -167,7 +221,6 @@ def _verify_exit(symbol, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP):
             notify.send(f"⚠️ {symbol} — algo exited but no broker has closed yet (all still holding; "
                         f"their OCO hasn't triggered). Consistent across brokers — monitoring, not a desync.")
         return
-    # phase 2: give the OTHERS `leeway` to flatten too; stop early once all flat
     while True:
         still = [l for l, s in _sizes(targets) if s]
         if not still or time.time() - anchor >= leeway:
@@ -180,3 +233,51 @@ def _verify_exit(symbol, leeway=LEEWAY, poll=POLL_EVERY, cap=ANCHOR_CAP):
         log.warning("broker_verify: exit desync on %s — still open: %s", symbol, still)
     else:
         notify.send(f"🏁 {symbol} — all brokers confirmed flat.")
+
+
+def _auto_flatten(symbol, targets, still, outcome, settle=2.0, retry_wait=3.0, kill_wait=30.0):
+    """Tier 1: targeted flatten of the stragglers (cancel their brackets + market-close), retry
+    once. Tier 2: full kill; auto-resume ONLY after broker truth confirms all flat — else stay
+    halted and alert (the one case a human must decide)."""
+    log.warning("broker_verify: AUTO-FLATTEN %s (%s) stragglers=%s", symbol, outcome, still)
+    for label, _fn, _exp, flatten in targets:
+        if label in still:
+            try:
+                flatten()
+            except Exception:                          # noqa: BLE001
+                log.exception("broker_verify: targeted flatten failed on %s", label)
+    time.sleep(settle)
+    rem = [l for l, s in _sizes(targets) if s]
+    if rem:                                            # retry once
+        for label, _fn, _exp, flatten in targets:
+            if label in rem:
+                try:
+                    flatten()
+                except Exception:                      # noqa: BLE001
+                    log.exception("broker_verify: flatten retry failed on %s", label)
+        time.sleep(retry_wait)
+        rem = [l for l, s in _sizes(targets) if s]
+    if not rem:
+        notify.send(f"⚠️ {symbol} TP-DESYNC AUTO-FLATTEN — algo exited {str(outcome).upper()} but "
+                    + ", ".join(still) + " still held. Closed at market + cancelled brackets. All flat ✓")
+        return
+    # ── tier 2: full kill, auto-resume only on confirmed flat ──
+    notify.send("🚨 " + symbol + " auto-flatten could NOT confirm flat on: " + ", ".join(rem)
+                + " — escalating to FULL KILL.")
+    try:
+        execution.flatten_all()
+    except Exception:                                  # noqa: BLE001
+        log.exception("broker_verify: kill (topstep) failed")
+    try:
+        tradovate_exec.flatten_all_accounts()
+    except Exception:                                  # noqa: BLE001
+        log.exception("broker_verify: kill (tradovate) failed")
+    t0 = time.time()
+    while time.time() - t0 < kill_wait:
+        if not any(s for _l, s in _sizes(targets)):
+            execution.resume(); tradovate_exec.resume()
+            notify.send(f"✅ {symbol} KILL confirmed all flat — entries AUTO-RESUMED.")
+            return
+        time.sleep(POLL_EVERY)
+    notify.send(f"🚨 {symbol} STILL NOT FLAT after kill — entries remain HALTED. "
+                f"Check the broker(s) manually, then /kill + /resume.")

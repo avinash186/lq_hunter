@@ -301,6 +301,18 @@ def _account_name(login_id, account_id):
     return str(account_id)
 
 
+_broker_close_hook = None                 # live.py registers callback(symbol, price|None)
+_last_fill_px: dict[tuple, float] = {}    # (login_id, acct_id) -> latest fill price (close classify)
+_CLOSE_HOOK_GRACE = 15.0                  # ignore a netPos=0 within this many sec of the open
+
+
+def set_broker_close_hook(fn) -> None:
+    """Register a callback fired when a Tradovate account's tracked position CLOSES in real
+    time — reverse-desync detection (broker exited first, paper still open). Additive."""
+    global _broker_close_hook
+    _broker_close_hook = fn
+
+
 def on_position_event(login_id, account_id, contract_id, net_pos) -> None:
     """Real-time position update from the WS. netPos==0 => broker closed the position; free
     the one-at-a-time slot immediately + alert (mirrors execution.on_position_update)."""
@@ -310,6 +322,7 @@ def on_position_event(login_id, account_id, contract_id, net_pos) -> None:
     if sym is None:
         return
     key = (login_id, str(account_id), sym)
+    closed_after = None
     with _lock:
         s = _state.setdefault(key, {"status": FLAT})
         if net_pos == 0:
@@ -318,14 +331,27 @@ def on_position_event(login_id, account_id, contract_id, net_pos) -> None:
                 name = _account_name(login_id, account_id)
                 log.info("tradovate_exec: %s %s closed (real-time) -> flat", name, sym)
                 notify.send(f"🏁 Tradovate {name} {sym} position closed on broker (real-time).")
+                if time.time() - s.get("open_ts", 0) > _CLOSE_HOOK_GRACE:
+                    closed_after = sym                 # mature position -> reverse-desync check
         elif s.get("status") == FLAT:                  # opened/confirmed
             s.update(status=OPEN, contract_id=contract_id, open_ts=time.time())
+    if closed_after and _broker_close_hook:            # outside the lock
+        try:
+            _broker_close_hook(closed_after, _last_fill_px.get((login_id, str(account_id))))
+        except Exception:                              # noqa: BLE001
+            log.exception("tradovate_exec: broker-close hook failed for %s", closed_after)
 
 
 def on_fill_event(login_id, account_id, contract_id, qty, price, action) -> None:
     """Real-time fill (logged only; the per-account fill/consistency ALERTS come from
-    broker_verify, so we don't double-message Telegram)."""
+    broker_verify, so we don't double-message Telegram). The price is remembered so a
+    subsequent position-close event can be classified TP-side vs SL-side."""
     sym = _symbol_for_contract(login_id, contract_id) or contract_id
+    try:
+        if price is not None:
+            _last_fill_px[(login_id, str(account_id))] = float(price)
+    except Exception:                                  # noqa: BLE001
+        pass
     log.info("tradovate_exec: fill %s %s %s x%s @ %s",
              _account_name(login_id, account_id), sym, action, qty, price)
 

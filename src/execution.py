@@ -188,11 +188,23 @@ def submit(symbol: str, signal: dict) -> dict:
             return {"action": "error", "reason": "submit_failed_no_order"}
 
 
+_broker_close_hook = None                 # live.py registers callback(symbol, price|None)
+
+
+def set_broker_close_hook(fn) -> None:
+    """Register a callback fired when the broker reports a tracked position CLOSED in
+    real time — lets the live engine detect the reverse desync (broker exited first while
+    the paper trade is still open, e.g. during a feed outage). Additive; None = off."""
+    global _broker_close_hook
+    _broker_close_hook = fn
+
+
 def on_position_update(positions: list[dict]) -> None:
     """User-hub GatewayUserPosition handler (pure-ish): a contract going to size 0
     means the OCO resolved — mark that symbol flat. Never places orders."""
     open_cids = {p.get("contractId") for p in positions if (p.get("size") or 0) != 0}
     now = time.time()
+    closed = []
     with _lock:
         for sym, s in _state.items():
             cid = s.get("contract_id")
@@ -200,8 +212,15 @@ def on_position_update(positions: list[dict]) -> None:
                 if now - s.get("open_ts", 0) < _FILL_GRACE:
                     continue                          # too fresh — ignore a lagging event
                 s["status"] = FLAT
+                closed.append(sym)
                 log.info("execution: %s position closed (broker) -> flat", sym)
                 notify.send_and_relay_trade(f"🏁 {sym} position closed on broker.")
+    for sym in closed:                                # outside the lock — hook may do real work
+        if _broker_close_hook:
+            try:
+                _broker_close_hook(sym, None)         # ProjectX position event carries no price
+            except Exception:                         # noqa: BLE001
+                log.exception("execution: broker-close hook failed for %s", sym)
 
 
 def reconcile() -> None:

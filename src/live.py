@@ -18,6 +18,7 @@ disk or recomputes the level universe — that keeps live latency flat.
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
 
@@ -57,6 +58,19 @@ def _market_open(now=None) -> bool:
 
 def _et(sec: int) -> pd.Timestamp:
     return pd.Timestamp(int(sec), unit="s")          # naive ET wall-clock
+
+
+def classify_broker_close(px, tp, sl):
+    """Which bracket leg a broker-side close was: 'tp' / 'sl' by proximity of the close
+    price, None when unknown/ambiguous (pure -> unit-tested)."""
+    if px is None or px != px:
+        return None
+    d_tp, d_sl = abs(float(px) - float(tp)), abs(float(px) - float(sl))
+    if d_tp < d_sl:
+        return "tp"
+    if d_sl < d_tp:
+        return "sl"
+    return None
 
 
 def completed_windows(dt: pd.Timestamp):
@@ -121,6 +135,7 @@ class LiveEngine:
         self.tick = tick_size or {}
         self.states = {s: SymbolState(s) for s in self.symbols}
         self._last_pos = {}              # latest pos_in_bracket per symbol (for SMT partner)
+        self._last_px = {}               # latest tick price per symbol (broker-close classify)
         self._score_window = 180_000     # ~125 days of 1m bars for live feature recompute
         self._trade = {s: None for s in self.symbols}    # open trade per symbol (one at a time)
         self.hub = None
@@ -151,6 +166,10 @@ class LiveEngine:
                 self.states[s].contract = topstep.front_contract(s)
             except Exception:
                 log.exception("live: contract lookup failed for %s", s)
+        # reverse-desync detection: broker-side closes notify the engine even if registered
+        # while DRY (the handler itself checks execute_broker at fire time)
+        execution.set_broker_close_hook(self._on_broker_close)
+        tradovate_exec.set_broker_close_hook(self._on_broker_close)
         if settings.execute_broker():                         # broker truth before we trade
             try:
                 execution.reconcile_startup()
@@ -182,10 +201,13 @@ class LiveEngine:
                 notify.send("🤖 Bot live\n\n" + tgcontrol.settings_summary())
             except Exception:
                 log.exception("live: startup card / command menu failed")
+        self._shadow_q = queue.Queue(maxsize=256)         # bars pending per-model paper scoring
         threading.Thread(target=self._connect_loop, name="live-feed", daemon=True).start()
         threading.Thread(target=self._minute_loop, name="live-minute", daemon=True).start()
         threading.Thread(target=self._flush_loop, name="live-flush", daemon=True).start()
         threading.Thread(target=self._backfill_scores, name="live-backfill", daemon=True).start()
+        if config.SHADOW_SCORE:                            # OFF by default — paper-score all other models
+            threading.Thread(target=self._shadow_loop, name="live-shadow", daemon=True).start()
         if config.WEEKLY_RETRAIN:                          # OFF by default (see config.py)
             threading.Thread(target=self._retrain_loop, name="live-retrain", daemon=True).start()
 
@@ -201,6 +223,22 @@ class LiveEngine:
                 log.info("live: backfilled missing scores %s", added)
         except Exception:
             log.exception("live: score backfill failed (continuing)")
+
+    def _shadow_loop(self):
+        """Off the hot path: for each closed bar, PAPER-score every non-active model + run its
+        one-at-a-time paper trade engine (no broker). The active model's latency is untouched."""
+        from src import shadow_score
+        while not self._stop:
+            try:
+                symbol, bar = self._shadow_q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            try:
+                df = data_loader.live_frame(symbol)
+                if len(df) >= 10_000:
+                    shadow_score.score_bar(symbol, df.tail(self._score_window), bar, self.broadcast)
+            except Exception:
+                log.exception("live: shadow scoring failed for %s", symbol)
 
     def stop(self):
         self._stop = True
@@ -322,6 +360,7 @@ class LiveEngine:
             f["high"] = max(f["high"], price); f["low"] = min(f["low"], price)
             f["close"] = price; f["volume"] += volume
         self._check_sweeps(symbol, price, ts)
+        self._last_px[symbol] = price
         if self._trade.get(symbol) is not None:
             try:
                 self._check_exit(symbol, price, ts)
@@ -357,6 +396,11 @@ class LiveEngine:
             self._emit_score(symbol, bar)
         except Exception:
             log.exception("live: model score failed for %s", symbol)
+        if config.SHADOW_SCORE:                            # additive: paper-score every OTHER model, off hot path
+            try:
+                self._shadow_q.put_nowait((symbol, dict(bar)))
+            except Exception:                              # queue full -> drop this bar's shadow pass, catch up next
+                pass
 
     def _emit_score(self, symbol, bar):
         """On bar close: recompute base features over a rolling window, score with
@@ -463,7 +507,31 @@ class LiveEngine:
         self.broadcast({"e": "trade_close", "sym": symbol, **rec})
         emo = "✅" if R > 0 else "❌"
         notify.send_and_relay_trade(f"{emo} {symbol} {outcome.upper()}   R {R:+.2f}   P&L ${rec['pnl_usd']:+.0f}")
-        broker_verify.verify_exit(symbol)                # additive: confirm ALL brokers flat, else alert
+        broker_verify.verify_exit(symbol, outcome=outcome,           # tp/eod desync -> auto-flatten failsafe
+                                  reentered=lambda s=symbol: self._trade.get(s) is not None)
+
+    def _on_broker_close(self, symbol, price=None):
+        """REVERSE desync: a broker reported OUR position closed while the paper trade is
+        still open (e.g. its TP limit filled during a feed outage). TP-side -> book the paper
+        TP; _close_trade then runs verify_exit, whose failsafe sweeps any broker still holding.
+        SL-side / ambiguous -> alert only (the feed/reconcile path resolves it)."""
+        try:
+            tr = self._trade.get(symbol)
+            if tr is None or not settings.execute_broker():
+                return
+            px = price if price is not None else self._last_px.get(symbol)
+            side = classify_broker_close(px, tr["tp"], tr["sl"])
+            if side == "tp" and config.AUTO_FLATTEN_TP:
+                log.warning("live: broker closed %s FIRST near TP (px~%s) -> booking TP + failsafe", symbol, px)
+                notify.send(f"⚠️ {symbol} a broker exited FIRST near the TP while the paper trade was "
+                            f"still open — booking the TP and sweeping any brokers still holding.")
+                self._close_trade(symbol, int(time.time()), "tp", tr["tp"])
+            else:
+                notify.send(f"⚠️ {symbol} a broker closed its position while the paper trade is open "
+                            f"(close ~{px}) — looks {'SL' if side == 'sl' else 'ambiguous'}-side; "
+                            f"paper exit will follow the feed. Review if unexpected.")
+        except Exception:
+            log.exception("live: broker-close hook failed for %s", symbol)
 
     # ───────────── Telegram commands (/kill failsafe) ─────────────
     def _cmd_kill(self, chat_id=None):
@@ -635,15 +703,18 @@ class LiveEngine:
                         notify.send("⚠️ Weekly retrain failed — see logs")
                     except Exception:
                         pass
-            if config.AUTO_PROMOTE:
+            try:                                          # refresh challenger shadow trades — ALWAYS
+                shadow_live.update_challengers(self.symbols)   # (needed for eval even when AUTO_PROMOTE=0)
+            except Exception:
+                log.exception("live: shadow update failed")
+            if config.AUTO_PROMOTE:                        # AUTO_PROMOTE gates ONLY promotion, not shadow-eval
                 try:
-                    shadow_live.update_challengers(self.symbols)
                     for v in shadow.run():
                         if v.get("promoted") and notify.configured():
                             notify.send(f"🏆 Auto-promoted {v['name']} to LIVE — beat the "
                                         f"champion on {v['shadow_trades']} shadow trades")
                 except Exception:
-                    log.exception("live: shadow update / auto-promotion failed")
+                    log.exception("live: auto-promotion failed")
 
     # ───────────── persistence ─────────────
     def _flush_loop(self):
